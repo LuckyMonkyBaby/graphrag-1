@@ -1,10 +1,10 @@
 # Copyright (c) 2024 Microsoft Corporation.
 # Licensed under the MIT License
 
-"""Context Build utility methods."""
+"""Context Build utility methods with source tracking."""
 
 import random
-from typing import Any, cast
+from typing import Any, Dict, List, Tuple, cast
 
 import pandas as pd
 import tiktoken
@@ -26,10 +26,10 @@ def build_text_unit_context(
     max_context_tokens: int = 8000,
     context_name: str = "Sources",
     random_state: int = 86,
-) -> tuple[str, dict[str, pd.DataFrame]]:
-    """Prepare text-unit data table as context data for system prompt."""
+) -> tuple[str, dict[str, pd.DataFrame], List[Dict[str, Any]]]:
+    """Prepare text-unit data table as context data for system prompt with source tracking."""
     if text_units is None or len(text_units) == 0:
-        return ("", {})
+        return ("", {}, [])
 
     if shuffle_data:
         random.seed(random_state)
@@ -49,6 +49,9 @@ def build_text_unit_context(
     current_context_text += column_delimiter.join(header) + "\n"
     current_tokens = num_tokens(current_context_text, token_encoder)
     all_context_records = [header]
+    
+    # New list to collect source references
+    source_references = []
 
     for unit in text_units:
         new_context = [
@@ -68,6 +71,18 @@ def build_text_unit_context(
         current_context_text += new_context_text
         all_context_records.append(new_context)
         current_tokens += new_tokens
+        
+        # Extract source tracking information if available
+        if unit.attributes:
+            # Check for source file attributes
+            source_ref = {}
+            for key, value in unit.attributes.items():
+                if key.startswith('source_'):
+                    source_ref[key] = value
+            
+            if source_ref and 'source_file' in source_ref:
+                # Add source reference to the list
+                source_references.append(source_ref)
 
     if len(all_context_records) > 1:
         record_df = pd.DataFrame(
@@ -75,7 +90,8 @@ def build_text_unit_context(
         )
     else:
         record_df = pd.DataFrame()
-    return current_context_text, {context_name.lower(): record_df}
+    
+    return current_context_text, {context_name.lower(): record_df}, source_references
 
 
 def count_relationships(

@@ -72,6 +72,8 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
 
         log.info("GENERATE ANSWER: %s. QUERY: %s", start_time, query)
         try:
+            # Format prompt with context_data and response_type
+            # Check if source_references method exists and use it
             if "drift_query" in kwargs:
                 drift_query = kwargs["drift_query"]
                 search_prompt = self.system_prompt.format(
@@ -80,10 +82,29 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
                     global_query=drift_query,
                 )
             else:
-                search_prompt = self.system_prompt.format(
-                    context_data=context_result.context_chunks,
-                    response_type=self.response_type,
-                )
+                # Use get_source_references_text method if available
+                if hasattr(context_result, 'get_source_references_text'):
+                    search_prompt = self.system_prompt.format(
+                        context_data=context_result.context_chunks,
+                        response_type=self.response_type,
+                        source_references=context_result.get_source_references_text()
+                    )
+                else:
+                    # Backward compatibility - if prompt expects source_references but method doesn't exist
+                    if "{source_references}" in self.system_prompt:
+                        # Replace with empty placeholder
+                        search_prompt = self.system_prompt.format(
+                            context_data=context_result.context_chunks,
+                            response_type=self.response_type,
+                            source_references="No source file information available."
+                        )
+                    else:
+                        # Old format without source_references
+                        search_prompt = self.system_prompt.format(
+                            context_data=context_result.context_chunks,
+                            response_type=self.response_type,
+                        )
+            
             history_messages = [
                 {"role": "system", "content": search_prompt},
             ]
@@ -145,9 +166,30 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
             **self.context_builder_params,
         )
         log.info("GENERATE ANSWER: %s. QUERY: %s", start_time, query)
-        search_prompt = self.system_prompt.format(
-            context_data=context_result.context_chunks, response_type=self.response_type
-        )
+        
+        # Use get_source_references_text method if available
+        if hasattr(context_result, 'get_source_references_text'):
+            search_prompt = self.system_prompt.format(
+                context_data=context_result.context_chunks, 
+                response_type=self.response_type,
+                source_references=context_result.get_source_references_text()
+            )
+        else:
+            # Backward compatibility - if prompt expects source_references but method doesn't exist
+            if "{source_references}" in self.system_prompt:
+                # Replace with empty placeholder
+                search_prompt = self.system_prompt.format(
+                    context_data=context_result.context_chunks,
+                    response_type=self.response_type,
+                    source_references="No source file information available."
+                )
+            else:
+                # Old format without source_references
+                search_prompt = self.system_prompt.format(
+                    context_data=context_result.context_chunks,
+                    response_type=self.response_type,
+                )
+                
         history_messages = [
             {"role": "system", "content": search_prompt},
         ]

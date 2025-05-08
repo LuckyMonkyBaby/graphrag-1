@@ -1,10 +1,10 @@
 # Copyright (c) 2024 Microsoft Corporation.
 # Licensed under the MIT License
-"""Algorithms to build context data for local search prompt."""
+"""Algorithms to build context data for local search prompt with source tracking."""
 
 import logging
 from copy import deepcopy
-from typing import Any
+from typing import Any, List, Dict
 
 import pandas as pd
 import tiktoken
@@ -111,10 +111,11 @@ class LocalSearchMixedContext(LocalContextBuilder):
         min_community_rank: int = 0,
         community_context_name: str = "Reports",
         column_delimiter: str = "|",
+        track_sources: bool = True,  # New parameter to enable/disable source tracking
         **kwargs: dict[str, Any],
     ) -> ContextBuilderResult:
         """
-        Build data context for local search prompt.
+        Build data context for local search prompt with source tracking.
 
         Build a context by combining community reports and entity/relationship/covariate tables, and text units using a predefined ratio set by summary_prop.
         """
@@ -151,6 +152,9 @@ class LocalSearchMixedContext(LocalContextBuilder):
         # build context
         final_context = list[str]()
         final_context_data = dict[str, pd.DataFrame]()
+        
+        # Create a list to collect source references
+        all_source_references = []
 
         if conversation_history:
             # build conversation history context
@@ -205,21 +209,40 @@ class LocalSearchMixedContext(LocalContextBuilder):
             final_context.append(str(local_context))
             final_context_data = {**final_context_data, **local_context_data}
 
+        # Build text unit context with source tracking
         text_unit_tokens = max(int(max_context_tokens * text_unit_prop), 0)
-        text_unit_context, text_unit_context_data = self._build_text_unit_context(
-            selected_entities=selected_entities,
-            max_context_tokens=text_unit_tokens,
-            return_candidate_context=return_candidate_context,
-        )
+        if track_sources:
+            # Use the updated build_text_unit_context that returns source references
+            text_unit_context, text_unit_context_data, source_references = self._build_text_unit_context_with_sources(
+                selected_entities=selected_entities,
+                max_context_tokens=text_unit_tokens,
+                return_candidate_context=return_candidate_context,
+            )
+            # Add source references to the collection
+            all_source_references.extend(source_references)
+        else:
+            # Use the original method without source tracking
+            text_unit_context, text_unit_context_data = self._build_text_unit_context(
+                selected_entities=selected_entities,
+                max_context_tokens=text_unit_tokens,
+                return_candidate_context=return_candidate_context,
+            )
 
         if text_unit_context.strip() != "":
             final_context.append(text_unit_context)
             final_context_data = {**final_context_data, **text_unit_context_data}
 
-        return ContextBuilderResult(
+        # Create result with source references
+        result = ContextBuilderResult(
             context_chunks="\n\n".join(final_context),
             context_records=final_context_data,
         )
+        
+        # Add source references if tracked
+        if track_sources and all_source_references:
+            result.source_references = all_source_references
+            
+        return result
 
     def _build_community_context(
         self,
@@ -302,18 +325,18 @@ class LocalSearchMixedContext(LocalContextBuilder):
                 else:
                     context_data[context_key]["in_context"] = True
         return (str(context_text), context_data)
-
-    def _build_text_unit_context(
+    
+    def _build_text_unit_context_with_sources(
         self,
         selected_entities: list[Entity],
         max_context_tokens: int = 8000,
         return_candidate_context: bool = False,
         column_delimiter: str = "|",
         context_name: str = "Sources",
-    ) -> tuple[str, dict[str, pd.DataFrame]]:
-        """Rank matching text units and add them to the context window until it hits the max_context_tokens limit."""
+    ) -> tuple[str, dict[str, pd.DataFrame], List[Dict[str, Any]]]:
+        """Rank matching text units and add them to the context window with source tracking."""
         if not selected_entities or not self.text_units:
-            return ("", {context_name.lower(): pd.DataFrame()})
+            return ("", {context_name.lower(): pd.DataFrame()}, [])
         selected_text_units = []
         text_unit_ids_set = set()
 
@@ -342,7 +365,8 @@ class LocalSearchMixedContext(LocalContextBuilder):
 
         selected_text_units = [unit[0] for unit in unit_info_list]
 
-        context_text, context_data = build_text_unit_context(
+        # Use the modified build_text_unit_context that returns source references
+        context_text, context_data, source_references = build_text_unit_context(
             text_units=selected_text_units,
             token_encoder=self.token_encoder,
             max_context_tokens=max_context_tokens,
@@ -372,7 +396,25 @@ class LocalSearchMixedContext(LocalContextBuilder):
                 else:
                     context_data[context_key]["in_context"] = True
 
-        return (str(context_text), context_data)
+        return (str(context_text), context_data, source_references)
+
+    def _build_text_unit_context(
+        self,
+        selected_entities: list[Entity],
+        max_context_tokens: int = 8000,
+        return_candidate_context: bool = False,
+        column_delimiter: str = "|",
+        context_name: str = "Sources",
+    ) -> tuple[str, dict[str, pd.DataFrame]]:
+        """Original method for backward compatibility."""
+        context_text, context_data, _ = self._build_text_unit_context_with_sources(
+            selected_entities=selected_entities,
+            max_context_tokens=max_context_tokens,
+            return_candidate_context=return_candidate_context,
+            column_delimiter=column_delimiter,
+            context_name=context_name,
+        )
+        return (context_text, context_data)
 
     def _build_local_context(
         self,
