@@ -47,3 +47,17 @@ class LocalSearchConfig(BaseModel):
         description="The maximum tokens.",
         default=graphrag_config_defaults.local_search.max_context_tokens,
     )
+    
+    # Source tracking options
+    include_sources: bool = Field(
+        description="Include source references in search results.",
+        default=getattr(graphrag_config_defaults.local_search, 'include_sources', False),
+    )
+    highlight_sources: bool = Field(
+        description="Highlight source matches in results.",
+        default=getattr(graphrag_config_defaults.local_search, 'highlight_sources', False),
+    )
+    context_lines: int = Field(
+        description="Number of context lines to show around source matches.",
+        default=getattr(graphrag_config_defaults.local_search, 'context_lines', 3),
+    )

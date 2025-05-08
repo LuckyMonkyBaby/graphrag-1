@@ -40,3 +40,12 @@ class ChunkingConfig(BaseModel):
         description="Count metadata in max tokens.",
         default=graphrag_config_defaults.chunks.chunk_size_includes_metadata,
     )
+    # New source tracking options
+    track_sources: bool = Field(
+        description="Track source file paths and locations for chunks.",
+        default=getattr(graphrag_config_defaults.chunks, 'track_sources', False),
+    )
+    source_path_column: str = Field(
+        description="Column name containing source file paths.",
+        default=getattr(graphrag_config_defaults.chunks, 'source_path_column', 'source_path'),
+    )

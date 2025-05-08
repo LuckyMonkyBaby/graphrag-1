@@ -48,6 +48,9 @@ class BasicSearchDefaults:
     max_context_tokens: int = 12_000
     chat_model_id: str = DEFAULT_CHAT_MODEL_ID
     embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID
+    include_sources: bool = False
+    highlight_sources: bool = False
+    context_lines: int = 3
 
 
 @dataclass
@@ -73,7 +76,9 @@ class ChunksDefaults:
     encoding_model: str = "cl100k_base"
     prepend_metadata: bool = False
     chunk_size_includes_metadata: bool = False
-
+    # New source tracking options
+    track_sources: bool = False  # Disabled by default
+    source_path_column: str = "source_path"  # Default column name for source paths
 
 @dataclass
 class ClusterGraphDefaults:
@@ -123,6 +128,9 @@ class DriftSearchDefaults:
     local_search_llm_max_gen_completion_tokens = None
     chat_model_id: str = DEFAULT_CHAT_MODEL_ID
     embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID
+    include_sources: bool = False
+    highlight_sources: bool = False
+    context_lines: int = 3
 
 
 @dataclass
@@ -232,6 +240,9 @@ class GlobalSearchDefaults:
     dynamic_search_use_summary: bool = False
     dynamic_search_max_level: int = 2
     chat_model_id: str = DEFAULT_CHAT_MODEL_ID
+    include_sources: bool = False
+    highlight_sources: bool = False
+    context_lines: int = 3
 
 
 @dataclass
@@ -298,6 +309,9 @@ class LocalSearchDefaults:
     max_context_tokens: int = 12_000
     chat_model_id: str = DEFAULT_CHAT_MODEL_ID
     embedding_model_id: str = DEFAULT_EMBEDDING_MODEL_ID
+    include_sources: bool = False
+    highlight_sources: bool = False
+    context_lines: int = 3
 
 
 @dataclass

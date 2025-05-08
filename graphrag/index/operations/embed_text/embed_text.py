@@ -44,8 +44,9 @@ async def embed_text(
     embedding_name: str,
     id_column: str = "id",
     title_column: str | None = None,
+    source_path_column: str | None = None,  # New parameter for source file paths
 ):
-    """Embed a piece of text into a vector space. The operation outputs a new column containing a mapping between doc_id and vector."""
+    """Embed a piece of text into a vector space with source tracking."""
     vector_store_config = strategy.get("vector_store")
 
     if vector_store_config:
@@ -66,6 +67,7 @@ async def embed_text(
             vector_store_config=vector_store_workflow_config,
             id_column=id_column,
             title_column=title_column,
+            source_path_column=source_path_column,  # Pass through the source paths
         )
 
     return await _text_embed_in_memory(
@@ -104,6 +106,7 @@ async def _text_embed_with_vector_store(
     vector_store_config: dict,
     id_column: str = "id",
     title_column: str | None = None,
+    source_path_column: str | None = None,  # New parameter
 ):
     strategy_type = strategy["type"]
     strategy_exec = load_strategy(strategy_type)
@@ -150,6 +153,12 @@ async def _text_embed_with_vector_store(
         texts: list[str] = batch[embed_column].to_numpy().tolist()
         titles: list[str] = batch[title].to_numpy().tolist()
         ids: list[str] = batch[id_column].to_numpy().tolist()
+        
+        # Get source paths if available
+        source_paths = None
+        if source_path_column and source_path_column in batch.columns:
+            source_paths = batch[source_path_column].to_numpy().tolist()
+        
         result = await strategy_exec(texts, callbacks, cache, strategy_config)
         if result.embeddings:
             embeddings = [
@@ -159,16 +168,52 @@ async def _text_embed_with_vector_store(
 
         vectors = result.embeddings or []
         documents: list[VectorStoreDocument] = []
-        for doc_id, doc_text, doc_title, doc_vector in zip(
+        
+        for idx, (doc_id, doc_text, doc_title, doc_vector) in enumerate(zip(
             ids, texts, titles, vectors, strict=True
-        ):
+        )):
             if type(doc_vector) is np.ndarray:
                 doc_vector = doc_vector.tolist()
+            
+            # Create attributes with title
+            attributes = {"title": doc_title}
+            
+            # Add source path information if available
+            if source_paths:
+                attributes["source_file"] = source_paths[idx]
+            
+            # If doc_text has source location information from chunking
+            if hasattr(doc_text, "text_chunk") and hasattr(doc_text, "source_location"):
+                # Extract the text from TextChunk
+                text_content = doc_text.text_chunk
+                
+                # Add source location information to attributes
+                if doc_text.source_location:
+                    source_loc = doc_text.source_location
+                    attributes["source_file"] = source_loc.file_path
+                    attributes["source_line_start"] = source_loc.start_line
+                    attributes["source_line_end"] = source_loc.end_line
+                    attributes["source_char_start"] = source_loc.start_char
+                    attributes["source_char_end"] = source_loc.end_char
+            elif isinstance(doc_text, tuple) and len(doc_text) >= 4 and doc_text[3]:
+                # Handle the case where it's a tuple with source location as the 4th element
+                text_content = doc_text[1]
+                source_loc = doc_text[3]
+                
+                attributes["source_file"] = source_loc.file_path
+                attributes["source_line_start"] = source_loc.start_line
+                attributes["source_line_end"] = source_loc.end_line
+                attributes["source_char_start"] = source_loc.start_char
+                attributes["source_char_end"] = source_loc.end_char
+            else:
+                # Regular text without source information
+                text_content = doc_text
+            
             document = VectorStoreDocument(
                 id=doc_id,
-                text=doc_text,
+                text=text_content,
                 vector=doc_vector,
-                attributes={"title": doc_title},
+                attributes=attributes,
             )
             documents.append(document)
 

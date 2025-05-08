@@ -37,12 +37,20 @@ async def run_pipeline(
     logger: ProgressLogger,
     is_update_run: bool = False,
 ) -> AsyncIterable[PipelineRunResult]:
-    """Run all workflows using a simplified pipeline."""
+    """Run all workflows using a simplified pipeline.
+    
+    Note: This pipeline now supports source tracking through the modified components.
+    The source tracking information flows through the entire pipeline:
+    1. Document loading (load_text.py) records original file paths
+    2. Chunking (chunk_text.py, strategies.py) tracks positions within files
+    3. Embedding (embed_text.py) stores source information in vector database
+    """
     root_dir = config.root_dir
 
     storage = create_storage_from_config(config.output)
     cache = create_cache_from_config(config.cache, root_dir)
 
+    # create_input now sets source_path for each document (in modified load_text.py)
     dataset = await create_input(config.input, logger, root_dir)
 
     # load existing state in case any workflows are stateful
@@ -76,6 +84,7 @@ async def run_pipeline(
             )
 
             # Run the pipeline on the new documents
+            # The pipeline components now maintain source tracking through the workflow
             async for table in _run_pipeline(
                 pipeline=pipeline,
                 config=config,
@@ -94,6 +103,8 @@ async def run_pipeline(
             storage=storage, cache=cache, callbacks=callbacks, state=state
         )
 
+        # The pipeline components (run_workflow.py, chunk_text.py, etc.) now
+        # handle source tracking through each step
         async for table in _run_pipeline(
             pipeline=pipeline,
             config=config,
@@ -126,7 +137,11 @@ async def _run_pipeline(
             progress = logger.child(name, transient=False)
             context.callbacks.workflow_start(name, None)
             work_time = time.time()
+            
+            # Each workflow function (including modified run_workflow.py) 
+            # now maintains source tracking information
             result = await workflow_function(config, context)
+            
             progress(Progress(percent=1))
             context.callbacks.workflow_end(name, result)
             yield PipelineRunResult(

@@ -24,34 +24,17 @@ def chunk_text(
     encoding_model: str,
     strategy: ChunkStrategyType,
     callbacks: WorkflowCallbacks,
+    file_path_column: str | None = None,  # New parameter for source tracking
 ) -> pd.Series:
     """
-    Chunk a piece of text into smaller pieces.
+    Chunk a piece of text into smaller pieces with optional source tracking.
 
     ## Usage
     ```yaml
     args:
-        column: <column name> # The name of the column containing the text to chunk, this can either be a column with text, or a column with a list[tuple[doc_id, str]]
-        strategy: <strategy config> # The strategy to use to chunk the text, see below for more details
-    ```
-
-    ## Strategies
-    The text chunk verb uses a strategy to chunk the text. The strategy is an object which defines the strategy to use. The following strategies are available:
-
-    ### tokens
-    This strategy uses the [tokens] library to chunk a piece of text. The strategy config is as follows:
-
-    ```yaml
-    strategy: tokens
-    size: 1200 # Optional, The chunk size to use, default: 1200
-    overlap: 100 # Optional, The chunk overlap to use, default: 100
-    ```
-
-    ### sentence
-    This strategy uses the nltk library to chunk a piece of text into sentences. The strategy config is as follows:
-
-    ```yaml
-    strategy: sentence
+        column: <column name> # The name of the column containing the text to chunk
+        file_path_column: <column name> # Optional: column name containing source file paths
+        strategy: <strategy config> # The strategy to use to chunk the text
     ```
     """
     strategy_exec = load_strategy(strategy)
@@ -59,24 +42,48 @@ def chunk_text(
     num_total = _get_num_total(input, column)
     tick = progress_ticker(callbacks.progress, num_total)
 
-    # collapse the config back to a single object to support "polymorphic" function call
+    # Get file paths if a column is specified
+    has_file_paths = file_path_column is not None and file_path_column in input.columns
+    
+    # Config object
     config = ChunkingConfig(size=size, overlap=overlap, encoding_model=encoding_model)
 
-    return cast(
-        "pd.Series",
-        input.apply(
-            cast(
-                "Any",
-                lambda x: run_strategy(
-                    strategy_exec,
-                    x[column],
-                    config,
-                    tick,
+    # Apply chunking with or without source tracking
+    if has_file_paths:
+        # With source tracking
+        return cast(
+            "pd.Series",
+            input.apply(
+                cast(
+                    "Any",
+                    lambda x: run_strategy_with_source(
+                        strategy_exec,
+                        x[column],
+                        x[file_path_column],  # Pass file path for this row
+                        config,
+                        tick,
+                    ),
                 ),
+                axis=1,
             ),
-            axis=1,
-        ),
-    )
+        )
+    else:
+        # Without source tracking (original behavior)
+        return cast(
+            "pd.Series",
+            input.apply(
+                cast(
+                    "Any",
+                    lambda x: run_strategy(
+                        strategy_exec,
+                        x[column],
+                        config,
+                        tick,
+                    ),
+                ),
+                axis=1,
+            ),
+        )
 
 
 def run_strategy(
@@ -85,16 +92,19 @@ def run_strategy(
     config: ChunkingConfig,
     tick: ProgressTicker,
 ) -> list[str | tuple[list[str] | None, str, int]]:
-    """Run strategy method definition."""
+    """Run strategy method definition (original without source tracking)."""
     if isinstance(input, str):
-        return [item.text_chunk for item in strategy_exec([input], config, tick)]
+        # Use a placeholder file path when not tracking sources
+        file_paths = ["unknown"]
+        chunks = strategy_exec([input], file_paths, config, tick)
+        return [chunk.text_chunk for chunk in chunks]
 
     # We can work with both just a list of text content
     # or a list of tuples of (document_id, text content)
-    # text_to_chunk = '''
     texts = [item if isinstance(item, str) else item[1] for item in input]
-
-    strategy_results = strategy_exec(texts, config, tick)
+    file_paths = ["unknown"] * len(texts)  # Placeholder file paths
+    
+    strategy_results = strategy_exec(texts, file_paths, config, tick)
 
     results = []
     for strategy_result in strategy_results:
@@ -108,6 +118,54 @@ def run_strategy(
                 strategy_result.text_chunk,
                 strategy_result.n_tokens,
             ))
+    return results
+
+
+def run_strategy_with_source(
+    strategy_exec: ChunkStrategy,
+    input: ChunkInput,
+    file_path: str,
+    config: ChunkingConfig,
+    tick: ProgressTicker,
+) -> list[tuple[list[str] | None, str, int, Any]]:  # Added source_location to tuple
+    """Run chunking strategy with source tracking."""
+    if isinstance(input, str):
+        chunks = strategy_exec([input], [file_path], config, tick)
+        return [(None, chunk.text_chunk, chunk.n_tokens or 0, chunk.source_location) 
+                for chunk in chunks]
+
+    # Handle lists of text or tuples
+    texts = [item if isinstance(item, str) else item[1] for item in input]
+    
+    # Create file paths for each text (using the provided path as a base)
+    if len(texts) == 1:
+        paths = [file_path]
+    else:
+        paths = [f"{file_path}_{i}" for i in range(len(texts))]
+    
+    chunks = strategy_exec(texts, paths, config, tick)
+    
+    results = []
+    for chunk in chunks:
+        doc_indices = chunk.source_doc_indices
+        if isinstance(input[doc_indices[0]], str):
+            # Just text
+            results.append((
+                None, 
+                chunk.text_chunk, 
+                chunk.n_tokens or 0,
+                chunk.source_location
+            ))
+        else:
+            # With document IDs
+            doc_ids = [input[doc_idx][0] for doc_idx in doc_indices]
+            results.append((
+                doc_ids,
+                chunk.text_chunk,
+                chunk.n_tokens or 0,
+                chunk.source_location
+            ))
+    
     return results
 
 

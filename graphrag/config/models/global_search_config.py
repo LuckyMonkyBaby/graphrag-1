@@ -65,3 +65,17 @@ class GlobalSearchConfig(BaseModel):
         description="The maximum level of community hierarchy to consider if none of the processed communities are relevant",
         default=graphrag_config_defaults.global_search.dynamic_search_max_level,
     )
+    
+    # Source tracking options
+    include_sources: bool = Field(
+        description="Include source references in search results.",
+        default=getattr(graphrag_config_defaults.global_search, 'include_sources', False),
+    )
+    highlight_sources: bool = Field(
+        description="Highlight source matches in results.",
+        default=getattr(graphrag_config_defaults.global_search, 'highlight_sources', False),
+    )
+    context_lines: int = Field(
+        description="Number of context lines to show around source matches.",
+        default=getattr(graphrag_config_defaults.global_search, 'context_lines', 3),
+    )
