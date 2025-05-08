@@ -1,7 +1,7 @@
 # Copyright (c) 2024 Microsoft Corporation.
 # Licensed under the MIT License
 
-"""A module containing load method definition."""
+"""A module containing load method definition with source tracking."""
 
 import logging
 from pathlib import Path
@@ -22,7 +22,7 @@ async def load_text(
     progress: ProgressLogger | None,
     storage: PipelineStorage,
 ) -> pd.DataFrame:
-    """Load text inputs from a directory."""
+    """Load text inputs from a directory with source path tracking."""
 
     async def load_file(path: str, group: dict | None = None) -> pd.DataFrame:
         if group is None:
@@ -31,7 +31,9 @@ async def load_text(
         new_item = {**group, "text": text}
         new_item["id"] = gen_sha512_hash(new_item, new_item.keys())
         new_item["title"] = str(Path(path).name)
+        new_item["source_path"] = path  # Store the source file path for tracking
         new_item["creation_date"] = await storage.get_creation_date(path)
+        log.info(f"Loaded file {path} with source tracking")
         return pd.DataFrame([new_item])
 
     return await load_files(load_file, config, storage, progress)
