@@ -261,7 +261,7 @@ def create_base_text_units(
                     aggregated.at[idx, "attributes"] = attrs
     
     # Determine which columns to include in the result
-    result_columns = [*group_by_columns, "id", "document_ids", "text", "n_tokens"]
+    result_columns = [*group_by_columns, "document_ids", "text", "n_tokens"]
     if "attributes" in aggregated.columns:
         result_columns.append("attributes")
         
