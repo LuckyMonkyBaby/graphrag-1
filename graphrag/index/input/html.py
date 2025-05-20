@@ -19,7 +19,7 @@ from graphrag.storage.pipeline_storage import PipelineStorage
 
 log = logging.getLogger(__name__)
 
-# Try to import chardet, but handle the case where it's not installed
+# Try to import chardet, but handle the case where it's not installedg
 try:
     import chardet
     CHARDET_AVAILABLE = True
@@ -39,10 +39,43 @@ async def load_html(
         if group is None:
             group = {}
         
-        # Read the HTML content with encoding detection
-        raw_content = await storage.get(path, binary=True)
-        html_content, encoding = detect_and_decode_html(raw_content, config.encoding)
-        
+        try:
+            # Use as_bytes=True to get binary content for encoding detection
+            raw_content = await storage.get(path, as_bytes=True)
+            
+            # Detect encoding if chardet is available
+            detected_encoding = None
+            if CHARDET_AVAILABLE:
+                detection = chardet.detect(raw_content[:10000])
+                detected_encoding = detection['encoding']
+                log.debug(f"Detected encoding: {detected_encoding} (confidence: {detection['confidence']:.2f})")
+            
+            # Use the encoding from config, detected encoding, or fallback
+            encoding_to_use = config.encoding or detected_encoding or 'windows-1252'
+            
+            # Get content with the determined encoding
+            try:
+                html_content = await storage.get(path, encoding=encoding_to_use)
+            except UnicodeDecodeError:
+                # Fallback to a safe encoding if the detected one fails
+                log.warning(f"Failed to decode with {encoding_to_use}, trying fallback encodings")
+                for fallback_encoding in ['windows-1252', 'iso-8859-1', 'utf-8', 'latin-1']:
+                    try:
+                        html_content = await storage.get(path, encoding=fallback_encoding)
+                        encoding_to_use = fallback_encoding
+                        log.debug(f"Successfully decoded with fallback encoding: {fallback_encoding}")
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    # If all fallbacks fail, use a replacement strategy
+                    html_content = raw_content.decode('utf-8', errors='replace')
+                    encoding_to_use = 'utf-8-replaced'
+                    log.warning(f"All encodings failed for {path}, using replacement characters")
+        except Exception as e:
+            log.warning(f"Error reading {path}: {e}")
+            raise
+            
         # Parse HTML with BeautifulSoup
         soup = BeautifulSoup(html_content, 'html.parser')
         
@@ -59,7 +92,7 @@ async def load_html(
             "doc_sequence": document_structure.get("doc_sequence"),
             "pages": len(document_structure.get("pages", [])),
             "paragraphs": len(document_structure.get("paragraphs", [])),
-            "encoding": encoding
+            "encoding": encoding_to_use
         }
         
         # Include metadata fields based on config
@@ -81,73 +114,6 @@ async def load_html(
         return process_data_columns(df, config, path)
 
     return await load_files(load_file, config, storage, progress)
-
-
-def detect_and_decode_html(raw_content: bytes, specified_encoding: Optional[str] = None) -> Tuple[str, str]:
-    """Detect encoding and decode HTML content."""
-    if specified_encoding:
-        try:
-            return raw_content.decode(specified_encoding), specified_encoding
-        except UnicodeDecodeError:
-            log.warning(f"Failed to decode with specified encoding {specified_encoding}. Falling back to detection.")
-    
-    detected_encoding = None
-    
-    # First, try to detect encoding from content if chardet is available
-    if CHARDET_AVAILABLE:
-        detection = chardet.detect(raw_content[:10000])  # Use first 10KB for detection
-        detected_encoding = detection['encoding']
-        confidence = detection['confidence']
-        log.debug(f"Detected encoding: {detected_encoding} (confidence: {confidence:.2f})")
-    
-    # Try to parse with detected encoding to check for meta charset
-    if detected_encoding:
-        try:
-            decoded_sample = raw_content[:10000].decode(detected_encoding)
-            soup = BeautifulSoup(decoded_sample, 'html.parser')
-            
-            # Check for charset in meta tags
-            meta_encoding = None
-            for meta in soup.find_all('meta'):
-                if meta.get('charset'):
-                    meta_encoding = meta.get('charset')
-                    break
-                elif meta.get('content') and 'charset=' in meta.get('content', ''):
-                    content = meta.get('content')
-                    match = re.search(r'charset=([^;]+)', content)
-                    if match:
-                        meta_encoding = match.group(1).strip()
-                        break
-            
-            if meta_encoding:
-                log.debug(f"Found encoding in meta tag: {meta_encoding}")
-                detected_encoding = meta_encoding
-        except Exception as e:
-            log.debug(f"Error parsing HTML for meta encoding: {e}")
-    
-    # Default to common encodings if detection failed
-    if not detected_encoding or detected_encoding == 'ascii':
-        detected_encoding = 'windows-1252'  # Common default for HTML documents
-        log.debug(f"Using default encoding: {detected_encoding}")
-    
-    # Try to decode with the detected encoding
-    try:
-        decoded_content = raw_content.decode(detected_encoding)
-        return decoded_content, detected_encoding
-    except UnicodeDecodeError:
-        # Try alternate encodings common in HTML documents
-        for alt_encoding in ['windows-1252', 'iso-8859-1', 'latin-1', 'utf-8', 'cp1252']:
-            if alt_encoding != detected_encoding:
-                try:
-                    decoded_content = raw_content.decode(alt_encoding)
-                    log.debug(f"Successfully decoded with {alt_encoding}")
-                    return decoded_content, alt_encoding
-                except UnicodeDecodeError:
-                    continue
-        
-        # If all else fails, decode with 'replace' error handling
-        log.warning("All encodings failed. Decoding with 'replace' error handling.")
-        return raw_content.decode('utf-8', errors='replace'), 'utf-8-replaced'
 
 
 def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, Any]:
