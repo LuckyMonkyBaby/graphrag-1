@@ -175,21 +175,4 @@ class FilePipelineStorage(PipelineStorage):
 
 def join_path(file_path: str, file_name: str) -> Path:
     """Join a path and a file. Independent of the OS."""
-    return Path(file_path) / Path(file_name).parent / Path(file_name).name
-
-
-def create_file_storage(**kwargs: Any) -> PipelineStorage:
-    """Create a file based storage."""
-    base_dir = kwargs["base_dir"]
-    log.info("Creating file storage at %s", base_dir)
-    return FilePipelineStorage(root_dir=base_dir)
-
-
-def _create_progress_status(
-    num_loaded: int, num_filtered: int, num_total: int
-) -> Progress:
-    return Progress(
-        total_items=num_total,
-        completed_items=num_loaded + num_filtered,
-        description=f"{num_loaded} files loaded ({num_filtered} filtered)",
-    )
+    return Path(file_path) / Path(file_name).parent / Path(file_name).na

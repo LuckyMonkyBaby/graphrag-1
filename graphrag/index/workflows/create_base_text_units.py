@@ -1,24 +1,27 @@
-# Fix to apply to graphrag/index/workflows/create_base_text_units.py
+# Copyright (c) 2024 Microsoft Corporation.
+# Licensed under the MIT License
 
-# Modify the create_base_text_units function to ensure consistent types
-# and proper serialization of attributes
+"""A module containing run_workflow method definition."""
 
 import json
-from typing import Any, Dict, List, Optional, cast
+import logging
+from typing import Any, Dict, List, cast
 
 import pandas as pd
-
 
 from graphrag.callbacks.workflow_callbacks import WorkflowCallbacks
 from graphrag.config.models.chunking_config import ChunkStrategyType
 from graphrag.config.models.graph_rag_config import GraphRagConfig
+from graphrag.index.typing.context import PipelineRunContext
 from graphrag.index.operations.chunk_text.chunk_text import chunk_text
 from graphrag.index.operations.chunk_text.strategies import get_encoding_fn
-from graphrag.index.typing.context import PipelineRunContext
 from graphrag.index.typing.workflow import WorkflowFunctionOutput
 from graphrag.index.utils.hashing import gen_sha512_hash
 from graphrag.logger.progress import Progress
 from graphrag.utils.storage import load_table_from_storage, write_table_to_storage
+
+# Add logger
+log = logging.getLogger(__name__)
 
 
 async def run_workflow(
@@ -30,6 +33,7 @@ async def run_workflow(
 
     chunks = config.chunks
 
+    # Create the text units
     output = create_base_text_units(
         documents,
         context.callbacks,
@@ -46,16 +50,24 @@ async def run_workflow(
     # Make a copy to ensure it's serializable
     documents_copy = documents.copy()
     
-    # Convert any problematic columns to JSON strings
-    if "html_attributes" in documents_copy.columns:
-        documents_copy["html_attributes"] = documents_copy["html_attributes"].apply(
-            lambda x: json.dumps(x) if x is not None else None
-        )
+    # Make sure all complex structures are JSON serialized
+    for column in documents_copy.columns:
+        if documents_copy[column].dtype == 'object':
+            # Check for dict or list values that need serialization
+            contains_complex = documents_copy[column].apply(
+                lambda x: isinstance(x, (dict, list)) and not isinstance(x, str)
+            ).any()
+            
+            if contains_complex:
+                documents_copy[column] = documents_copy[column].apply(
+                    lambda x: json.dumps(x) if isinstance(x, (dict, list)) and not isinstance(x, str) else x
+                )
     
     await write_table_to_storage(documents_copy, "dataset", context.storage)
     await write_table_to_storage(output, "text_units", context.storage)
 
     return WorkflowFunctionOutput(result=output)
+
 
 def create_base_text_units(
     documents: pd.DataFrame,
@@ -71,10 +83,6 @@ def create_base_text_units(
     """All the steps to transform base text_units."""
     sort = documents.sort_values(by=["id"], ascending=[True])
 
-    # Preserve HTML attributes if they exist
-    if "html_attributes" not in sort.columns:
-        sort["html_attributes"] = None
-    
     sort["text_with_ids"] = list(
         zip(*[sort[col] for col in ["id", "text"]], strict=True)
     )
@@ -85,8 +93,9 @@ def create_base_text_units(
     if "metadata" in documents:
         agg_dict["metadata"] = "first"  # type: ignore
     
-    # Add HTML attributes to aggregation
-    if "html_attributes" in documents:
+    # Handle HTML attributes if they exist
+    html_attributes_present = "html_attributes" in documents.columns
+    if html_attributes_present:
         agg_dict["html_attributes"] = "first"  # type: ignore
 
     aggregated = (
@@ -108,7 +117,12 @@ def create_base_text_units(
         if prepend_metadata and "metadata" in row:
             metadata = row["metadata"]
             if isinstance(metadata, str):
-                metadata = json.loads(metadata)
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    # If it fails to parse, use as is
+                    metadata = {"raw": metadata}
+                    
             if isinstance(metadata, dict):
                 metadata_str = (
                     line_delimiter.join(f"{k}: {v}" for k, v in metadata.items())
@@ -146,10 +160,9 @@ def create_base_text_units(
 
     aggregated = aggregated.apply(lambda row: chunker(row), axis=1)
 
+    # Determine columns to keep
     columns_to_keep = [*group_by_columns, "chunks"]
-    
-    # Add HTML attributes if they exist
-    if "html_attributes" in aggregated.columns:
+    if html_attributes_present:
         columns_to_keep.append("html_attributes")
     
     aggregated = cast("pd.DataFrame", aggregated[columns_to_keep])
@@ -164,109 +177,117 @@ def create_base_text_units(
         lambda row: gen_sha512_hash(row, ["chunk"]), axis=1
     )
     
-    # Extract document_ids, text, and n_tokens from chunk
+    # Original approach for extracting columns
     chunk_df = pd.DataFrame(
         aggregated["chunk"].tolist(), 
-        index=aggregated.index,
-        columns=["document_ids", "text", "n_tokens"]
+        index=aggregated.index
     )
     
-    # Handle case where chunk_df might be empty
-    if not chunk_df.empty:
+    # Make sure column names are correct and data is properly aligned
+    if len(chunk_df.columns) >= 3:
+        chunk_df.columns = ["document_ids", "text", "n_tokens"]
         for col in ["document_ids", "text", "n_tokens"]:
             aggregated[col] = chunk_df[col]
     else:
-        aggregated["document_ids"] = None
-        aggregated["text"] = None
-        aggregated["n_tokens"] = None
+        # Handle case where chunk DataFrame doesn't have expected columns
+        log.warning(f"Chunk DataFrame has unexpected columns: {chunk_df.columns}")
+        # Set default values for missing columns
+        if 0 < len(chunk_df.columns):
+            aggregated["document_ids"] = chunk_df.iloc[:, 0]
+        else:
+            aggregated["document_ids"] = None
+            
+        if 1 < len(chunk_df.columns):
+            aggregated["text"] = chunk_df.iloc[:, 1]
+        else:
+            aggregated["text"] = None
+            
+        if 2 < len(chunk_df.columns):
+            aggregated["n_tokens"] = chunk_df.iloc[:, 2]
+        else:
+            aggregated["n_tokens"] = None
     
-    # Add HTML structure tracking for chunks
-    if "html_attributes" in aggregated.columns:
+    # Process HTML attributes to extract essential info
+    if html_attributes_present:
         # Create attributes column with HTML information
         aggregated["attributes"] = aggregated.apply(
-            lambda row: _create_html_attributes(row), axis=1
-        )
-        
-        # Convert attributes to JSON string to ensure it's serializable
-        aggregated["attributes"] = aggregated["attributes"].apply(
-            lambda x: json.dumps(x) if x is not None else None
+            lambda row: extract_html_attributes(row), axis=1
         )
     else:
-        # Ensure attributes column exists with consistent None values
-        aggregated["attributes"] = None
+        # Ensure attributes column exists with empty dict value
+        aggregated["attributes"] = [{}] * len(aggregated)
+    
+    # Ensure document_ids is always a list
+    aggregated["document_ids"] = aggregated["document_ids"].apply(
+        lambda x: [] if x is None else (x if isinstance(x, list) else [x])
+    )
+    
+    # Convert attributes to JSON string for serialization
+    aggregated["attributes"] = aggregated["attributes"].apply(json.dumps)
     
     # Filter out rows with no text and reset index
     result = cast(
         "pd.DataFrame", aggregated[aggregated["text"].notna()].reset_index(drop=True)
     )
     
-    # Ensure consistent types for list columns to avoid Parquet serialization issues
-    # Make sure document_ids is always a list
-    result["document_ids"] = result["document_ids"].apply(
-        lambda x: [] if x is None else (x if isinstance(x, list) else [x])
-    )
-    
     return result
 
 
-def _create_html_attributes(row: pd.Series) -> Optional[Dict[str, Any]]:
-    """Create attributes dictionary with HTML information."""
-    if row.get("html_attributes") is None:
-        return None
+def extract_html_attributes(row: pd.Series) -> Dict[str, Any]:
+    """Extract HTML attributes from existing html_attributes."""
+    # Default structure
+    attributes = {
+        "page": None,
+        "paragraph": None,
+        "char_position": {
+            "start": None,
+            "end": None
+        }
+    }
     
-    # Extract HTML attributes
-    html_attrs = row.get("html_attributes", {})
+    # Get text content for matching
+    chunk_text = row.get("text", "")
+    if not chunk_text:
+        return attributes
     
-    # If html_attrs is a string (JSON), parse it
+    # Get HTML attributes
+    html_attrs = row.get("html_attributes")
+    if not html_attrs:
+        return attributes
+    
+    # Parse if JSON string
     if isinstance(html_attrs, str):
         try:
             html_attrs = json.loads(html_attrs)
         except json.JSONDecodeError:
-            return None
+            return attributes
     
-    # Get text content for this chunk
-    chunk_text = row.get("text", "")
-    if not chunk_text:
-        return None
-    
-    # Try to find the paragraph that matches this chunk
-    matching_paragraph = None
-    if "paragraph_info" in html_attrs:
-        paragraphs = html_attrs.get("paragraph_info", [])
-        for para in paragraphs:
-            para_text = para.get("text", "")
-            if para_text and (para_text in chunk_text or chunk_text in para_text):
-                matching_paragraph = para
-                break
-    
-    # Determine the page for this chunk
-    page_id = None
-    if matching_paragraph:
-        page_id = matching_paragraph.get("page_id")
-    elif "page_info" in html_attrs:
-        pages = html_attrs.get("page_info", [])
-        # Find the last page before this chunk
-        if pages:
-            page_id = pages[-1].get("page_id")
-    
-    # Create attributes dictionary
-    attributes = {
-        "html": {
-            "page_id": page_id,
-        }
-    }
-    
-    # Add paragraph info if available, but ensure it's a simple structure
-    if matching_paragraph:
-        # Extract only simple attributes to avoid nested complex structures
-        attributes["html"]["paragraph_id"] = matching_paragraph.get("para_id")
-        attributes["html"]["paragraph_num"] = matching_paragraph.get("para_num")
+    # Use the already parsed information
+    if isinstance(html_attrs, dict):
+        # Extract page info - use the last page as default
+        if "pages" in html_attrs and isinstance(html_attrs["pages"], list) and html_attrs["pages"]:
+            pages = html_attrs["pages"]
+            last_page = pages[-1]
+            if isinstance(last_page, dict):
+                attributes["page"] = {
+                    "id": last_page.get("page_id"),
+                    "number": last_page.get("page_num")
+                }
         
-        # Extract HTML tag info
-        html_tag_attrs = matching_paragraph.get("html_attributes", {})
-        if html_tag_attrs:
-            attributes["html"]["tag"] = html_tag_attrs.get("tag")
-            attributes["html"]["class"] = html_tag_attrs.get("class")
-            attributes["html"]["align"] = html_tag_attrs.get("align")
+        # Extract paragraph that matches this chunk
+        if "paragraphs" in html_attrs and isinstance(html_attrs["paragraphs"], list):
+            paragraphs = html_attrs["paragraphs"]
+            for para in paragraphs:
+                if isinstance(para, dict):
+                    para_text = para.get("text", "")
+                    # Check if paragraph text overlaps with chunk text
+                    if para_text and (para_text in chunk_text or chunk_text in para_text):
+                        attributes["paragraph"] = {
+                            "id": para.get("para_id"),
+                            "number": para.get("para_num")
+                        }
+                        attributes["char_position"]["start"] = para.get("char_start")
+                        attributes["char_position"]["end"] = para.get("char_end")
+                        break
     
     return attributes
