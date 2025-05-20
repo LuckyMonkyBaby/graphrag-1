@@ -1,61 +1,12 @@
-# Copyright (c) 2024 Microsoft Corporation.
-# Licensed under the MIT License
+# Fix to apply to graphrag/index/workflows/create_base_text_units.py
 
-"""A module containing run_workflow method definition."""
+# Modify the create_base_text_units function to ensure consistent types
+# and proper serialization of attributes
 
 import json
 from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd
-
-from graphrag.callbacks.workflow_callbacks import WorkflowCallbacks
-from graphrag.config.models.chunking_config import ChunkStrategyType
-from graphrag.config.models.graph_rag_config import GraphRagConfig
-from graphrag.index.operations.chunk_text.chunk_text import chunk_text
-from graphrag.index.operations.chunk_text.strategies import get_encoding_fn
-from graphrag.index.typing.context import PipelineRunContext
-from graphrag.index.typing.workflow import WorkflowFunctionOutput
-from graphrag.index.utils.hashing import gen_sha512_hash
-from graphrag.logger.progress import Progress
-from graphrag.utils.storage import load_table_from_storage, write_table_to_storage
-
-
-async def run_workflow(
-    config: GraphRagConfig,
-    context: PipelineRunContext,
-) -> WorkflowFunctionOutput:
-    """All the steps to transform base text_units."""
-    documents = await load_table_from_storage("documents", context.storage)
-
-    chunks = config.chunks
-
-    output = create_base_text_units(
-        documents,
-        context.callbacks,
-        chunks.group_by_columns,
-        chunks.size,
-        chunks.overlap,
-        chunks.encoding_model,
-        strategy=chunks.strategy,
-        prepend_metadata=chunks.prepend_metadata,
-        chunk_size_includes_metadata=chunks.chunk_size_includes_metadata,
-    )
-
-    # Store the original dataset for later use
-    # Make a copy to ensure it's serializable
-    documents_copy = documents.copy()
-    
-    # Convert any problematic columns to JSON strings
-    if "html_attributes" in documents_copy.columns:
-        documents_copy["html_attributes"] = documents_copy["html_attributes"].apply(
-            lambda x: json.dumps(x) if x is not None else None
-        )
-    
-    await write_table_to_storage(documents_copy, "dataset", context.storage)
-    await write_table_to_storage(output, "text_units", context.storage)
-
-    return WorkflowFunctionOutput(result=output)
-
 
 def create_base_text_units(
     documents: pd.DataFrame,
@@ -191,15 +142,20 @@ def create_base_text_units(
         aggregated["attributes"] = aggregated["attributes"].apply(
             lambda x: json.dumps(x) if x is not None else None
         )
+    else:
+        # Ensure attributes column exists with consistent None values
+        aggregated["attributes"] = None
     
     # Filter out rows with no text and reset index
     result = cast(
         "pd.DataFrame", aggregated[aggregated["text"].notna()].reset_index(drop=True)
     )
     
-    # Ensure 'attributes' column exists
-    if "attributes" not in result.columns:
-        result["attributes"] = None
+    # Ensure consistent types for list columns to avoid Parquet serialization issues
+    # Make sure document_ids is always a list
+    result["document_ids"] = result["document_ids"].apply(
+        lambda x: [] if x is None else (x if isinstance(x, list) else [x])
+    )
     
     return result
 
