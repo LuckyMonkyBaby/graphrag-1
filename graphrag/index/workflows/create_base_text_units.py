@@ -4,7 +4,7 @@
 """A module containing run_workflow method definition."""
 
 import json
-from typing import Any, cast
+from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd
 
@@ -42,7 +42,16 @@ async def run_workflow(
     )
 
     # Store the original dataset for later use
-    await write_table_to_storage(documents, "dataset", context.storage)
+    # Make a copy to ensure it's serializable
+    documents_copy = documents.copy()
+    
+    # Convert any problematic columns to JSON strings
+    if "html_attributes" in documents_copy.columns:
+        documents_copy["html_attributes"] = documents_copy["html_attributes"].apply(
+            lambda x: json.dumps(x) if x is not None else None
+        )
+    
+    await write_table_to_storage(documents_copy, "dataset", context.storage)
     await write_table_to_storage(output, "text_units", context.storage)
 
     return WorkflowFunctionOutput(result=output)
@@ -177,6 +186,11 @@ def create_base_text_units(
         aggregated["attributes"] = aggregated.apply(
             lambda row: _create_html_attributes(row), axis=1
         )
+        
+        # Convert attributes to JSON string to ensure it's serializable
+        aggregated["attributes"] = aggregated["attributes"].apply(
+            lambda x: json.dumps(x) if x is not None else None
+        )
     
     # Filter out rows with no text and reset index
     result = cast(
@@ -190,7 +204,7 @@ def create_base_text_units(
     return result
 
 
-def _create_html_attributes(row: pd.Series) -> dict:
+def _create_html_attributes(row: pd.Series) -> Optional[Dict[str, Any]]:
     """Create attributes dictionary with HTML information."""
     if row.get("html_attributes") is None:
         return None
@@ -198,8 +212,17 @@ def _create_html_attributes(row: pd.Series) -> dict:
     # Extract HTML attributes
     html_attrs = row.get("html_attributes", {})
     
+    # If html_attrs is a string (JSON), parse it
+    if isinstance(html_attrs, str):
+        try:
+            html_attrs = json.loads(html_attrs)
+        except json.JSONDecodeError:
+            return None
+    
     # Get text content for this chunk
     chunk_text = row.get("text", "")
+    if not chunk_text:
+        return None
     
     # Try to find the paragraph that matches this chunk
     matching_paragraph = None
@@ -224,9 +247,21 @@ def _create_html_attributes(row: pd.Series) -> dict:
     # Create attributes dictionary
     attributes = {
         "html": {
-            "paragraph": matching_paragraph,
             "page_id": page_id,
         }
     }
+    
+    # Add paragraph info if available, but ensure it's a simple structure
+    if matching_paragraph:
+        # Extract only simple attributes to avoid nested complex structures
+        attributes["html"]["paragraph_id"] = matching_paragraph.get("para_id")
+        attributes["html"]["paragraph_num"] = matching_paragraph.get("para_num")
+        
+        # Extract HTML tag info
+        html_tag_attrs = matching_paragraph.get("html_attributes", {})
+        if html_tag_attrs:
+            attributes["html"]["tag"] = html_tag_attrs.get("tag")
+            attributes["html"]["class"] = html_tag_attrs.get("class")
+            attributes["html"]["align"] = html_tag_attrs.get("align")
     
     return attributes

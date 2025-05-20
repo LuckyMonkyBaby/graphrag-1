@@ -3,6 +3,9 @@
 
 """A module containing run_workflow method definition."""
 
+import json
+from typing import Any, Dict, Optional
+
 import pandas as pd
 
 from graphrag.config.models.graph_rag_config import GraphRagConfig
@@ -19,7 +22,7 @@ async def run_workflow(
     """All the steps to transform the documents."""
     base_text_units = await load_table_from_storage("text_units", context.storage)
     
-    # Load the original dataset from storage instead of context.pipeline
+    # Load the original dataset from storage
     input_df = await load_table_from_storage("dataset", context.storage)
     
     output = create_final_documents(input_df, base_text_units)
@@ -66,27 +69,62 @@ def create_final_documents(input_df: pd.DataFrame, text_units: pd.DataFrame) -> 
     # Add human readable ID
     merged["human_readable_id"] = [f"doc_{i+1}" for i in range(len(merged))]
     
+    # Ensure metadata is serializable
+    merged["metadata"] = merged["metadata"].apply(
+        lambda x: json.dumps(x) if x is not None else None
+    )
+    
     # Select and order columns according to the schema
     output = merged.loc[:, DOCUMENTS_FINAL_COLUMNS].copy()
     
     return output
 
 
-def _process_html_metadata(row):
+def _process_html_metadata(row: pd.Series) -> Optional[Dict[str, Any]]:
     """Process and enhance HTML metadata for document preservation."""
     metadata = row.get("metadata", {})
     
     # If the metadata is None, create an empty dict
     if metadata is None:
         metadata = {}
+        
+    # If metadata is a JSON string, parse it
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
     
     # Add HTML-specific attributes if they exist
     html_attributes = row.get("html_attributes", {})
+    
+    # If html_attributes is a JSON string, parse it
+    if isinstance(html_attributes, str) and html_attributes is not None:
+        try:
+            html_attributes = json.loads(html_attributes)
+        except json.JSONDecodeError:
+            html_attributes = {}
+    
     if html_attributes:
-        # Create a specific HTML section in the metadata
-        metadata["html"] = {
-            "page_info": html_attributes.get("page_info", []),
-            "paragraph_info": html_attributes.get("paragraph_info", []),
+        # Create a simplified HTML section in the metadata
+        if "page_info" in html_attributes:
+            # Extract just the key page info (not the full complex objects)
+            page_info = []
+            for page in html_attributes.get("page_info", []):
+                page_info.append({
+                    "page_id": page.get("page_id"),
+                    "page_num": page.get("page_num")
+                })
+            
+            # Add page info to metadata
+            metadata["html_pages"] = page_info
+        
+        # Add document structure info
+        metadata["html_structure"] = {
+            "has_pages": bool(html_attributes.get("page_info")),
+            "has_paragraphs": bool(html_attributes.get("paragraph_info")),
+            "page_count": len(html_attributes.get("page_info", [])),
+            "paragraph_count": len(html_attributes.get("paragraph_info", []))
         }
     
     return metadata

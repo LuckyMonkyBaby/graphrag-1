@@ -3,6 +3,9 @@
 
 """A module containing run_workflow method definition."""
 
+import json
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
 
 from graphrag.config.models.graph_rag_config import GraphRagConfig
@@ -61,11 +64,32 @@ def create_final_text_units(
     """All the steps to transform the text units."""
     selected = text_units.loc[:, ["id", "text", "document_ids", "n_tokens"]]
     selected["human_readable_id"] = selected.index + 1
+    
+    # If the text units already have attributes, include them
+    if "attributes" in text_units.columns:
+        # Parse JSON strings back to dictionaries if needed
+        selected["attributes"] = text_units["attributes"].apply(
+            lambda x: json.loads(x) if isinstance(x, str) else x
+        )
+    else:
+        selected["attributes"] = None
 
-    # Add HTML attributes if they exist in the original dataset
+    # Add HTML attributes from original dataset if they exist
     if original_dataset is not None and "html_attributes" in original_dataset.columns:
-        # Add attributes to text units
-        selected["attributes"] = _extract_html_attributes(selected, original_dataset)
+        # Transform any JSON strings back to dictionaries
+        if original_dataset["html_attributes"].dtype == 'object':
+            original_dataset["html_attributes"] = original_dataset["html_attributes"].apply(
+                lambda x: json.loads(x) if isinstance(x, str) and x is not None else x
+            )
+        
+        # Extract and merge HTML attributes
+        html_attributes = _extract_html_attributes(selected, original_dataset)
+        
+        # Merge with existing attributes
+        selected["attributes"] = selected.apply(
+            lambda row: _merge_attributes(row["attributes"], html_attributes.get(row.name)), 
+            axis=1
+        )
 
     entity_join = _entities(final_entities)
     relationship_join = _relationships(final_relationships)
@@ -90,6 +114,11 @@ def create_final_text_units(
     for col in TEXT_UNITS_FINAL_COLUMNS:
         if col not in aggregated.columns:
             aggregated[col] = None
+    
+    # Convert attributes to serializable format
+    aggregated["attributes"] = aggregated["attributes"].apply(
+        lambda x: json.dumps(x) if x is not None else None
+    )
 
     return aggregated.loc[
         :,
@@ -97,10 +126,35 @@ def create_final_text_units(
     ]
 
 
-def _extract_html_attributes(text_units: pd.DataFrame, original_dataset: pd.DataFrame) -> list:
+def _merge_attributes(existing_attrs: Optional[Dict], new_attrs: Optional[Dict]) -> Optional[Dict]:
+    """Merge existing attributes with new HTML attributes."""
+    if existing_attrs is None and new_attrs is None:
+        return None
+    
+    if existing_attrs is None:
+        return new_attrs
+    
+    if new_attrs is None:
+        return existing_attrs
+    
+    # Create a copy to avoid modifying the original
+    result = existing_attrs.copy() if isinstance(existing_attrs, dict) else {}
+    
+    # If new_attrs has html section, merge it with existing html section
+    if "html" in new_attrs:
+        if "html" not in result:
+            result["html"] = {}
+        
+        # Update with new HTML attributes
+        result["html"].update(new_attrs["html"])
+    
+    return result
+
+
+def _extract_html_attributes(text_units: pd.DataFrame, original_dataset: pd.DataFrame) -> Dict[int, Dict]:
     """Extract HTML attributes for text units from the original dataset."""
-    # Initialize attributes list
-    attributes = [None] * len(text_units)
+    # Initialize attributes dict
+    attributes = {}
     
     # Map document IDs to their HTML attributes
     doc_to_html = {}
@@ -127,21 +181,28 @@ def _extract_html_attributes(text_units: pd.DataFrame, original_dataset: pd.Data
                 if para_info:
                     # Add paragraph and page information
                     text_attributes["html"] = {
-                        "paragraph": para_info,
+                        "paragraph_id": para_info.get("para_id"),
+                        "paragraph_num": para_info.get("para_num"),
                         "page_id": para_info.get("page_id"),
-                        "html_tag": para_info.get("html_attributes", {}).get("tag"),
-                        "html_class": para_info.get("html_attributes", {}).get("class"),
                     }
+                    
+                    # Add HTML tag info if available
+                    html_tag_attrs = para_info.get("html_attributes", {})
+                    if html_tag_attrs:
+                        text_attributes["html"]["tag"] = html_tag_attrs.get("tag")
+                        text_attributes["html"]["class"] = html_tag_attrs.get("class")
+                        text_attributes["html"]["align"] = html_tag_attrs.get("align")
+                    
                     break  # Found a match, no need to check other documents
         
-        # If HTML attributes were found, update the attributes list
+        # If HTML attributes were found, update the attributes dict
         if text_attributes:
             attributes[i] = text_attributes
     
     return attributes
 
 
-def _find_paragraph_for_text(text: str, paragraphs: list) -> dict:
+def _find_paragraph_for_text(text: str, paragraphs: list) -> Optional[Dict]:
     """Find the paragraph info that contains the given text."""
     if not text or not paragraphs:
         return None
@@ -154,7 +215,7 @@ def _find_paragraph_for_text(text: str, paragraphs: list) -> dict:
     # Try substring matching if exact match fails
     for para in paragraphs:
         para_text = para.get("text", "")
-        if text in para_text or para_text in text:
+        if para_text and (text in para_text or para_text in text):
             return para
     
     return None
