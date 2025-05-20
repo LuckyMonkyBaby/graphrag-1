@@ -6,7 +6,7 @@
 import logging
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from bs4 import BeautifulSoup, NavigableString, Tag
@@ -40,38 +40,28 @@ async def load_html(
             group = {}
         
         try:
-            # Use as_bytes=True to get binary content for encoding detection
+            # Use as_bytes parameter for binary reading
             raw_content = await storage.get(path, as_bytes=True)
             
-            # Detect encoding if chardet is available
-            detected_encoding = None
-            if CHARDET_AVAILABLE:
+            # Detect encoding if not specified
+            encoding_to_use = config.encoding
+            if not encoding_to_use and CHARDET_AVAILABLE:
                 detection = chardet.detect(raw_content[:10000])
-                detected_encoding = detection['encoding']
-                log.debug(f"Detected encoding: {detected_encoding} (confidence: {detection['confidence']:.2f})")
+                encoding_to_use = detection['encoding']
+                log.debug(f"Detected encoding: {encoding_to_use} (confidence: {detection['confidence']:.2f})")
             
-            # Use the encoding from config, detected encoding, or fallback
-            encoding_to_use = config.encoding or detected_encoding or 'windows-1252'
+            # Default encoding if none detected
+            if not encoding_to_use:
+                encoding_to_use = 'windows-1252'
             
-            # Get content with the determined encoding
+            # Read with detected encoding
             try:
                 html_content = await storage.get(path, encoding=encoding_to_use)
             except UnicodeDecodeError:
-                # Fallback to a safe encoding if the detected one fails
-                log.warning(f"Failed to decode with {encoding_to_use}, trying fallback encodings")
-                for fallback_encoding in ['windows-1252', 'iso-8859-1', 'utf-8', 'latin-1']:
-                    try:
-                        html_content = await storage.get(path, encoding=fallback_encoding)
-                        encoding_to_use = fallback_encoding
-                        log.debug(f"Successfully decoded with fallback encoding: {fallback_encoding}")
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                else:
-                    # If all fallbacks fail, use a replacement strategy
-                    html_content = raw_content.decode('utf-8', errors='replace')
-                    encoding_to_use = 'utf-8-replaced'
-                    log.warning(f"All encodings failed for {path}, using replacement characters")
+                # Fallback to a safe encoding if detection fails
+                log.warning(f"Failed to decode with {encoding_to_use}, falling back to windows-1252")
+                html_content = await storage.get(path, encoding='windows-1252')
+                encoding_to_use = 'windows-1252'
         except Exception as e:
             log.warning(f"Error reading {path}: {e}")
             raise
@@ -82,46 +72,30 @@ async def load_html(
         # Extract document structure
         document_structure = extract_document_structure(soup, Path(path).name)
         
-        # Create document metadata with HTML-specific information
-        html_metadata = {
-            "filename": document_structure.get("filename", Path(path).name),
+        # Create HTML metadata with basic information
+        html_info = {
+            "has_pages": bool(document_structure.get("pages")),
+            "has_paragraphs": bool(document_structure.get("paragraphs")),
             "doc_type": document_structure.get("doc_type"),
             "doc_sequence": document_structure.get("doc_sequence"),
-            "encoding": encoding_to_use,
-            "html_title": document_structure.get("title"),
-            "pages": len(document_structure.get("pages", [])),
-            "paragraphs": len(document_structure.get("paragraphs", [])),
-            "html_structure": {
-                "page_markers": [p.get("page_id") for p in document_structure.get("pages", [])],
-                "has_tables": bool(soup.find_all('table')),
-                "has_lists": bool(soup.find_all(['ul', 'ol'])),
-                "has_images": bool(soup.find_all('img')),
-                "has_links": bool(soup.find_all('a')),
-                "headings_count": len(soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])),
-            }
+            "page_count": len(document_structure.get("pages", [])),
+            "paragraph_count": len(document_structure.get("paragraphs", [])),
+            "encoding": encoding_to_use
         }
         
         # Create a dataframe with the document information
-        new_item = {
-            **group, 
-            "text": document_structure["text"],
-            "metadata": html_metadata,  # Add the HTML metadata
-            "html_attributes": {
-                "page_info": document_structure.get("pages", []),
-                "paragraph_info": document_structure.get("paragraphs", []),
-            }
-        }
+        new_item = {**group, "text": document_structure["text"]}
         
-        # Include metadata fields based on config
-        if config.metadata:
-            for field in config.metadata:
-                # Set metadata field if exists in document_structure or default to None
-                if field in document_structure:
-                    new_item[field] = document_structure[field]
-                else:
-                    new_item[field] = None
+        # Add metadata from both document and HTML
+        if "metadata" in new_item and new_item["metadata"] is not None:
+            if isinstance(new_item["metadata"], dict):
+                new_item["metadata"]["html"] = html_info
+            else:
+                new_item["metadata"] = {"original": new_item["metadata"], "html": html_info}
+        else:
+            new_item["metadata"] = {"html": html_info}
         
-        # Always include basic fields
+        # Add basic fields
         new_item["id"] = gen_sha512_hash(new_item, new_item.keys())
         new_item["title"] = document_structure.get("title", str(Path(path).name))
         new_item["creation_date"] = await storage.get_creation_date(path)
@@ -139,7 +113,6 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
         'text': '',             # Full text content
         'paragraphs': [],       # List of paragraph elements
         'pages': [],            # List of page markers
-        'page_map': {},         # Map of character positions to page IDs
         'filename': filename,   # Default to input filename
     }
     
@@ -149,7 +122,6 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
         document_structure['title'] = title_tag.get_text().strip()
     
     # Extract document metadata
-    # Look for type, sequence, and filename tags (common in SEC filings)
     type_tag = soup.find('type')
     if type_tag:
         document_structure['doc_type'] = type_tag.get_text().strip()
@@ -229,16 +201,7 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
             if element.name == 'p':
                 element_text = element.get_text().strip()
                 if element_text:
-                    # Find the current page if available
-                    current_page = None
-                    current_page_pos = -1
-                    for page in document_structure.get('pages', []):
-                        page_pos = page.get('char_pos', -1)
-                        if page_pos <= element_start and page_pos > current_page_pos:
-                            current_page = page.get('page_id')
-                            current_page_pos = page_pos
-                    
-                    # Add to paragraphs list with page information
+                    # Add to paragraphs list
                     para_info = {
                         'type': 'paragraph',
                         'text': element_text,
@@ -246,14 +209,9 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
                         'char_end': char_pos,
                         'para_id': f"p{len(document_structure['paragraphs'])+1}",
                         'para_num': len(document_structure['paragraphs'])+1,
-                        'element_path': element_path,
-                        'page_id': current_page,
-                        'html_attributes': {
-                            'tag': element.name,
-                            'class': element.get('class'),
-                            'id': element.get('id'),
-                            'align': element.get('align'),
-                        }
+                        'tag': element.name,
+                        'align': element.get('align'),
+                        'class': element.get('class'),
                     }
                     document_structure['paragraphs'].append(para_info)
     
@@ -274,16 +232,6 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
 def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     """Identify page markers in the document."""
     page_markers = []
-    char_pos = 0  # Track character position
-    
-    # Helper to update character position based on preceding elements
-    def update_char_pos(element):
-        nonlocal char_pos
-        prev = element.previous_elements
-        for p in prev:
-            if isinstance(p, NavigableString) and p.strip():
-                char_pos += len(p.strip()) + 1  # +1 for newline
-        return char_pos
     
     # Regex patterns for different page number formats
     page_patterns = [
@@ -329,20 +277,12 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                 # Remove any decimal points from page_id
                 page_id = page_id.replace('.', '')
                 
-                # Calculate and store character position
-                current_pos = update_char_pos(p)
-                
                 page_markers.append({
                     'page_id': page_id,
                     'page_num': page_num,
                     'text': text,
-                    'char_pos': current_pos,
-                    'html_attributes': {
-                        'tag': 'p',
-                        'align': 'center',
-                        'class': p.get('class'),
-                        'id': p.get('id'),
-                    }
+                    'tag': 'p',
+                    'align': 'center',
                 })
                 break
     
@@ -366,24 +306,13 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                     # Remove any decimal points from page_id
                     page_id = page_id.replace('.', '')
                     
-                    # Calculate and store character position
-                    current_pos = update_char_pos(p)
-                    
                     page_markers.append({
                         'page_id': page_id,
                         'page_num': page_num,
                         'text': text,
-                        'char_pos': current_pos,
-                        'html_attributes': {
-                            'tag': 'p',
-                            'align': p.get('align'),
-                            'class': p.get('class'),
-                            'id': p.get('id'),
-                        }
+                        'tag': 'p',
+                        'align': p.get('align'),
                     })
                     break
-    
-    # Sort page markers by character position
-    page_markers.sort(key=lambda x: x.get('char_pos', 0))
     
     return page_markers

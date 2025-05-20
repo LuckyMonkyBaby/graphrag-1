@@ -10,7 +10,7 @@ import shutil
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Optional, cast
 
 import aiofiles
 from aiofiles.os import remove
@@ -81,9 +81,21 @@ class FilePipelineStorage(PipelineStorage):
                 progress(_create_progress_status(num_loaded, num_filtered, num_total))
 
     async def get(
-        self, key: str, as_bytes: bool | None = False, encoding: str | None = None
+        self, key: str, as_bytes: bool | None = False, encoding: str | None = None, 
+        binary: bool | None = None  # Added for backward compatibility
     ) -> Any:
-        """Get method definition."""
+        """Get method definition.
+        
+        Args:
+            key: The key to get the value for
+            as_bytes: Whether to return the content as bytes
+            encoding: The encoding to use when reading the file
+            binary: Deprecated in favor of as_bytes, kept for backward compatibility
+        """
+        # For backward compatibility, if binary is specified, use it for as_bytes
+        if binary is not None:
+            as_bytes = binary
+            
         file_path = join_path(self._root_dir, key)
 
         if await self.has(key):
