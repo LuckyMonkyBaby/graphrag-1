@@ -31,12 +31,16 @@ async def run_workflow(
         "covariates", context.storage
     ):
         final_covariates = await load_table_from_storage("covariates", context.storage)
+    
+    # Also load original dataset to get HTML attributes
+    original_dataset = context.pipeline.dataset
 
     output = create_final_text_units(
         text_units,
         final_entities,
         final_relationships,
         final_covariates,
+        original_dataset,
     )
 
     await write_table_to_storage(output, "text_units", context.storage)
@@ -49,10 +53,16 @@ def create_final_text_units(
     final_entities: pd.DataFrame,
     final_relationships: pd.DataFrame,
     final_covariates: pd.DataFrame | None,
+    original_dataset: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """All the steps to transform the text units."""
     selected = text_units.loc[:, ["id", "text", "document_ids", "n_tokens"]]
     selected["human_readable_id"] = selected.index + 1
+
+    # Add HTML attributes if they exist in the original dataset
+    if original_dataset is not None and "html_attributes" in original_dataset.columns:
+        # Add attributes to text units
+        selected["attributes"] = _extract_html_attributes(selected, original_dataset)
 
     entity_join = _entities(final_entities)
     relationship_join = _relationships(final_relationships)
@@ -73,6 +83,67 @@ def create_final_text_units(
         :,
         TEXT_UNITS_FINAL_COLUMNS,
     ]
+
+
+def _extract_html_attributes(text_units: pd.DataFrame, original_dataset: pd.DataFrame) -> list:
+    """Extract HTML attributes for text units from the original dataset."""
+    # Initialize attributes list
+    attributes = [None] * len(text_units)
+    
+    # Map document IDs to their HTML attributes
+    doc_to_html = {}
+    for _, row in original_dataset.iterrows():
+        if "html_attributes" in row and row["html_attributes"] is not None:
+            doc_to_html[row["id"]] = row["html_attributes"]
+    
+    # For each text unit, find its associated document and extract relevant HTML attributes
+    for i, row in text_units.iterrows():
+        text_attributes = {}
+        
+        # Get document IDs for this text unit
+        doc_ids = row.get("document_ids", [])
+        
+        # Find HTML attributes for each associated document
+        for doc_id in doc_ids:
+            if doc_id in doc_to_html:
+                html_attrs = doc_to_html[doc_id]
+                
+                # Extract paragraph info for this text unit
+                para_info = _find_paragraph_for_text(row["text"], html_attrs.get("paragraph_info", []))
+                if para_info:
+                    # Add paragraph and page information
+                    text_attributes["html"] = {
+                        "paragraph": para_info,
+                        "page_id": para_info.get("page_id"),
+                        "html_tag": para_info.get("html_attributes", {}).get("tag"),
+                        "html_class": para_info.get("html_attributes", {}).get("class"),
+                    }
+                    break  # Found a match, no need to check other documents
+        
+        # If HTML attributes were found, update the attributes list
+        if text_attributes:
+            attributes[i] = text_attributes
+    
+    return attributes
+
+
+def _find_paragraph_for_text(text: str, paragraphs: list) -> dict:
+    """Find the paragraph info that contains the given text."""
+    if not text or not paragraphs:
+        return None
+    
+    # Try exact match first
+    for para in paragraphs:
+        if para.get("text") == text:
+            return para
+    
+    # Try substring matching if exact match fails
+    for para in paragraphs:
+        para_text = para.get("text", "")
+        if text in para_text or para_text in text:
+            return para
+    
+    return None
 
 
 def _entities(df: pd.DataFrame) -> pd.DataFrame:

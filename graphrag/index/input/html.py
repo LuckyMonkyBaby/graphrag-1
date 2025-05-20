@@ -19,7 +19,7 @@ from graphrag.storage.pipeline_storage import PipelineStorage
 
 log = logging.getLogger(__name__)
 
-# Try to import chardet, but handle the case where it's not installedg
+# Try to import chardet, but handle the case where it's not installed
 try:
     import chardet
     CHARDET_AVAILABLE = True
@@ -82,17 +82,34 @@ async def load_html(
         # Extract document structure
         document_structure = extract_document_structure(soup, Path(path).name)
         
-        # Create a dataframe with the document information
-        new_item = {**group, "text": document_structure["text"]}
-        
-        # Add metadata if available
-        metadata = {
+        # Create document metadata with HTML-specific information
+        html_metadata = {
             "filename": document_structure.get("filename", Path(path).name),
             "doc_type": document_structure.get("doc_type"),
             "doc_sequence": document_structure.get("doc_sequence"),
+            "encoding": encoding_to_use,
+            "html_title": document_structure.get("title"),
             "pages": len(document_structure.get("pages", [])),
             "paragraphs": len(document_structure.get("paragraphs", [])),
-            "encoding": encoding_to_use
+            "html_structure": {
+                "page_markers": [p.get("page_id") for p in document_structure.get("pages", [])],
+                "has_tables": bool(soup.find_all('table')),
+                "has_lists": bool(soup.find_all(['ul', 'ol'])),
+                "has_images": bool(soup.find_all('img')),
+                "has_links": bool(soup.find_all('a')),
+                "headings_count": len(soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])),
+            }
+        }
+        
+        # Create a dataframe with the document information
+        new_item = {
+            **group, 
+            "text": document_structure["text"],
+            "metadata": html_metadata,  # Add the HTML metadata
+            "html_attributes": {
+                "page_info": document_structure.get("pages", []),
+                "paragraph_info": document_structure.get("paragraphs", []),
+            }
         }
         
         # Include metadata fields based on config
@@ -212,7 +229,16 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
             if element.name == 'p':
                 element_text = element.get_text().strip()
                 if element_text:
-                    # Add to paragraphs list
+                    # Find the current page if available
+                    current_page = None
+                    current_page_pos = -1
+                    for page in document_structure.get('pages', []):
+                        page_pos = page.get('char_pos', -1)
+                        if page_pos <= element_start and page_pos > current_page_pos:
+                            current_page = page.get('page_id')
+                            current_page_pos = page_pos
+                    
+                    # Add to paragraphs list with page information
                     para_info = {
                         'type': 'paragraph',
                         'text': element_text,
@@ -220,7 +246,14 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
                         'char_end': char_pos,
                         'para_id': f"p{len(document_structure['paragraphs'])+1}",
                         'para_num': len(document_structure['paragraphs'])+1,
-                        'element_path': element_path
+                        'element_path': element_path,
+                        'page_id': current_page,
+                        'html_attributes': {
+                            'tag': element.name,
+                            'class': element.get('class'),
+                            'id': element.get('id'),
+                            'align': element.get('align'),
+                        }
                     }
                     document_structure['paragraphs'].append(para_info)
     
@@ -241,6 +274,16 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
 def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     """Identify page markers in the document."""
     page_markers = []
+    char_pos = 0  # Track character position
+    
+    # Helper to update character position based on preceding elements
+    def update_char_pos(element):
+        nonlocal char_pos
+        prev = element.previous_elements
+        for p in prev:
+            if isinstance(p, NavigableString) and p.strip():
+                char_pos += len(p.strip()) + 1  # +1 for newline
+        return char_pos
     
     # Regex patterns for different page number formats
     page_patterns = [
@@ -286,10 +329,20 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                 # Remove any decimal points from page_id
                 page_id = page_id.replace('.', '')
                 
+                # Calculate and store character position
+                current_pos = update_char_pos(p)
+                
                 page_markers.append({
                     'page_id': page_id,
                     'page_num': page_num,
                     'text': text,
+                    'char_pos': current_pos,
+                    'html_attributes': {
+                        'tag': 'p',
+                        'align': 'center',
+                        'class': p.get('class'),
+                        'id': p.get('id'),
+                    }
                 })
                 break
     
@@ -313,11 +366,24 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                     # Remove any decimal points from page_id
                     page_id = page_id.replace('.', '')
                     
+                    # Calculate and store character position
+                    current_pos = update_char_pos(p)
+                    
                     page_markers.append({
                         'page_id': page_id,
                         'page_num': page_num,
                         'text': text,
+                        'char_pos': current_pos,
+                        'html_attributes': {
+                            'tag': 'p',
+                            'align': p.get('align'),
+                            'class': p.get('class'),
+                            'id': p.get('id'),
+                        }
                     })
                     break
+    
+    # Sort page markers by character position
+    page_markers.sort(key=lambda x: x.get('char_pos', 0))
     
     return page_markers

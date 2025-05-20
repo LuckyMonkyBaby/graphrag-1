@@ -13,59 +13,78 @@ from graphrag.utils.storage import load_table_from_storage, write_table_to_stora
 
 
 async def run_workflow(
-    _config: GraphRagConfig,
+    config: GraphRagConfig,
     context: PipelineRunContext,
 ) -> WorkflowFunctionOutput:
-    """All the steps to transform final documents."""
-    documents = await load_table_from_storage("documents", context.storage)
-    text_units = await load_table_from_storage("text_units", context.storage)
-
-    output = create_final_documents(documents, text_units)
-
+    """All the steps to transform the documents."""
+    base_text_units = await load_table_from_storage("text_units", context.storage)
+    input_df = context.pipeline.dataset
+    
+    output = create_final_documents(input_df, base_text_units)
+    
     await write_table_to_storage(output, "documents", context.storage)
-
+    
     return WorkflowFunctionOutput(result=output)
 
 
-def create_final_documents(
-    documents: pd.DataFrame, text_units: pd.DataFrame
-) -> pd.DataFrame:
-    """All the steps to transform final documents."""
-    exploded = (
-        text_units.explode("document_ids")
-        .loc[:, ["id", "document_ids", "text"]]
-        .rename(
-            columns={
-                "document_ids": "chunk_doc_id",
-                "id": "chunk_id",
-                "text": "chunk_text",
-            }
-        )
+def create_final_documents(input_df: pd.DataFrame, text_units: pd.DataFrame) -> pd.DataFrame:
+    """All the steps to transform the documents.
+    
+    This function prepares the final document table for persistence by:
+    1. Mapping document IDs to their corresponding text units
+    2. Preserving any document metadata, including HTML-specific metadata 
+    3. Ensuring the output schema matches the expected document format
+    """
+    if "metadata" not in input_df.columns:
+        input_df["metadata"] = None
+    
+    # Process HTML metadata if it exists
+    input_df["metadata"] = input_df.apply(
+        lambda row: _process_html_metadata(row), axis=1
     )
-
-    joined = exploded.merge(
-        documents,
-        left_on="chunk_doc_id",
-        right_on="id",
-        how="inner",
-        copy=False,
+    
+    # Get text unit IDs for each document
+    text_units_with_doc_ids = text_units.loc[:, ["id", "document_ids"]]
+    text_units_with_doc_ids = text_units_with_doc_ids.explode("document_ids")
+    text_units_by_doc = (
+        text_units_with_doc_ids.groupby("document_ids", sort=False)
+        .agg(text_unit_ids=("id", "unique"))
+        .reset_index()
+        .rename(columns={"document_ids": "id"})
     )
-
-    docs_with_text_units = joined.groupby("id", sort=False).agg(
-        text_unit_ids=("chunk_id", list)
-    )
-
-    rejoined = docs_with_text_units.merge(
-        documents,
+    
+    # Merge document and text unit information
+    merged = pd.merge(
+        input_df,
+        text_units_by_doc,
         on="id",
-        how="right",
-        copy=False,
-    ).reset_index(drop=True)
+        how="left",
+    )
+    
+    # Add human readable ID
+    merged["human_readable_id"] = [f"doc_{i+1}" for i in range(len(merged))]
+    
+    # Select and order columns according to the schema
+    output = merged.loc[:, DOCUMENTS_FINAL_COLUMNS].copy()
+    
+    return output
 
-    rejoined["id"] = rejoined["id"].astype(str)
-    rejoined["human_readable_id"] = rejoined.index + 1
 
-    if "metadata" not in rejoined.columns:
-        rejoined["metadata"] = pd.Series(dtype="object")
-
-    return rejoined.loc[:, DOCUMENTS_FINAL_COLUMNS]
+def _process_html_metadata(row):
+    """Process and enhance HTML metadata for document preservation."""
+    metadata = row.get("metadata", {})
+    
+    # If the metadata is None, create an empty dict
+    if metadata is None:
+        metadata = {}
+    
+    # Add HTML-specific attributes if they exist
+    html_attributes = row.get("html_attributes", {})
+    if html_attributes:
+        # Create a specific HTML section in the metadata
+        metadata["html"] = {
+            "page_info": html_attributes.get("page_info", []),
+            "paragraph_info": html_attributes.get("paragraph_info", []),
+        }
+    
+    return metadata
