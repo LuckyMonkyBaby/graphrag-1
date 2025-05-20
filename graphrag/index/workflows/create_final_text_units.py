@@ -26,14 +26,17 @@ async def run_workflow(
     final_relationships = await load_table_from_storage(
         "relationships", context.storage
     )
+    
     final_covariates = None
     if config.extract_claims.enabled and await storage_has_table(
         "covariates", context.storage
     ):
         final_covariates = await load_table_from_storage("covariates", context.storage)
     
-    # Also load original dataset to get HTML attributes
-    original_dataset = context.pipeline.dataset
+    # Try to load original dataset for HTML attributes, but make it optional
+    original_dataset = None
+    if await storage_has_table("dataset", context.storage):
+        original_dataset = await load_table_from_storage("dataset", context.storage)
 
     output = create_final_text_units(
         text_units,
@@ -79,6 +82,15 @@ def create_final_text_units(
 
     aggregated = final_joined.groupby("id", sort=False).agg("first").reset_index()
 
+    # If 'attributes' is not in the dataframe, add it as None
+    if 'attributes' not in aggregated.columns:
+        aggregated['attributes'] = None
+
+    # Ensure all required columns from TEXT_UNITS_FINAL_COLUMNS are present
+    for col in TEXT_UNITS_FINAL_COLUMNS:
+        if col not in aggregated.columns:
+            aggregated[col] = None
+
     return aggregated.loc[
         :,
         TEXT_UNITS_FINAL_COLUMNS,
@@ -102,7 +114,9 @@ def _extract_html_attributes(text_units: pd.DataFrame, original_dataset: pd.Data
         
         # Get document IDs for this text unit
         doc_ids = row.get("document_ids", [])
-        
+        if doc_ids is None:
+            continue
+            
         # Find HTML attributes for each associated document
         for doc_id in doc_ids:
             if doc_id in doc_to_html:

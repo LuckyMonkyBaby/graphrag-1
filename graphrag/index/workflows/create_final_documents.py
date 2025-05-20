@@ -18,7 +18,9 @@ async def run_workflow(
 ) -> WorkflowFunctionOutput:
     """All the steps to transform the documents."""
     base_text_units = await load_table_from_storage("text_units", context.storage)
-    input_df = context.pipeline.dataset
+    
+    # Load the original dataset from storage instead of context.pipeline
+    input_df = await load_table_from_storage("dataset", context.storage)
     
     output = create_final_documents(input_df, base_text_units)
     

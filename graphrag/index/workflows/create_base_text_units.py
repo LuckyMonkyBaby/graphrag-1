@@ -41,6 +41,8 @@ async def run_workflow(
         chunk_size_includes_metadata=chunks.chunk_size_includes_metadata,
     )
 
+    # Store the original dataset for later use
+    await write_table_to_storage(documents, "dataset", context.storage)
     await write_table_to_storage(output, "text_units", context.storage)
 
     return WorkflowFunctionOutput(result=output)
@@ -60,6 +62,10 @@ def create_base_text_units(
     """All the steps to transform base text_units."""
     sort = documents.sort_values(by=["id"], ascending=[True])
 
+    # Preserve HTML attributes if they exist
+    if "html_attributes" not in sort.columns:
+        sort["html_attributes"] = None
+    
     sort["text_with_ids"] = list(
         zip(*[sort[col] for col in ["id", "text"]], strict=True)
     )
@@ -69,6 +75,10 @@ def create_base_text_units(
     agg_dict = {"text_with_ids": list}
     if "metadata" in documents:
         agg_dict["metadata"] = "first"  # type: ignore
+    
+    # Add HTML attributes to aggregation
+    if "html_attributes" in documents:
+        agg_dict["html_attributes"] = "first"  # type: ignore
 
     aggregated = (
         (
@@ -127,7 +137,13 @@ def create_base_text_units(
 
     aggregated = aggregated.apply(lambda row: chunker(row), axis=1)
 
-    aggregated = cast("pd.DataFrame", aggregated[[*group_by_columns, "chunks"]])
+    columns_to_keep = [*group_by_columns, "chunks"]
+    
+    # Add HTML attributes if they exist
+    if "html_attributes" in aggregated.columns:
+        columns_to_keep.append("html_attributes")
+    
+    aggregated = cast("pd.DataFrame", aggregated[columns_to_keep])
     aggregated = aggregated.explode("chunks")
     aggregated.rename(
         columns={
@@ -138,12 +154,79 @@ def create_base_text_units(
     aggregated["id"] = aggregated.apply(
         lambda row: gen_sha512_hash(row, ["chunk"]), axis=1
     )
-    aggregated[["document_ids", "chunk", "n_tokens"]] = pd.DataFrame(
-        aggregated["chunk"].tolist(), index=aggregated.index
+    
+    # Extract document_ids, text, and n_tokens from chunk
+    chunk_df = pd.DataFrame(
+        aggregated["chunk"].tolist(), 
+        index=aggregated.index,
+        columns=["document_ids", "text", "n_tokens"]
     )
-    # rename for downstream consumption
-    aggregated.rename(columns={"chunk": "text"}, inplace=True)
-
-    return cast(
+    
+    # Handle case where chunk_df might be empty
+    if not chunk_df.empty:
+        for col in ["document_ids", "text", "n_tokens"]:
+            aggregated[col] = chunk_df[col]
+    else:
+        aggregated["document_ids"] = None
+        aggregated["text"] = None
+        aggregated["n_tokens"] = None
+    
+    # Add HTML structure tracking for chunks
+    if "html_attributes" in aggregated.columns:
+        # Create attributes column with HTML information
+        aggregated["attributes"] = aggregated.apply(
+            lambda row: _create_html_attributes(row), axis=1
+        )
+    
+    # Filter out rows with no text and reset index
+    result = cast(
         "pd.DataFrame", aggregated[aggregated["text"].notna()].reset_index(drop=True)
     )
+    
+    # Ensure 'attributes' column exists
+    if "attributes" not in result.columns:
+        result["attributes"] = None
+    
+    return result
+
+
+def _create_html_attributes(row: pd.Series) -> dict:
+    """Create attributes dictionary with HTML information."""
+    if row.get("html_attributes") is None:
+        return None
+    
+    # Extract HTML attributes
+    html_attrs = row.get("html_attributes", {})
+    
+    # Get text content for this chunk
+    chunk_text = row.get("text", "")
+    
+    # Try to find the paragraph that matches this chunk
+    matching_paragraph = None
+    if "paragraph_info" in html_attrs:
+        paragraphs = html_attrs.get("paragraph_info", [])
+        for para in paragraphs:
+            para_text = para.get("text", "")
+            if para_text and (para_text in chunk_text or chunk_text in para_text):
+                matching_paragraph = para
+                break
+    
+    # Determine the page for this chunk
+    page_id = None
+    if matching_paragraph:
+        page_id = matching_paragraph.get("page_id")
+    elif "page_info" in html_attrs:
+        pages = html_attrs.get("page_info", [])
+        # Find the last page before this chunk
+        if pages:
+            page_id = pages[-1].get("page_id")
+    
+    # Create attributes dictionary
+    attributes = {
+        "html": {
+            "paragraph": matching_paragraph,
+            "page_id": page_id,
+        }
+    }
+    
+    return attributes
