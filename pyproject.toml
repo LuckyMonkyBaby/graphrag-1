@@ -90,6 +90,8 @@ tqdm = "^4.67.1"
 
 textblob = "^0.18.0.post0"
 spacy = "^3.8.4"
+chardet = "^5.2.0"
+bs4 = "^0.0.2"
 
 [tool.poetry.group.dev.dependencies]
 coverage = "^7.6.9"
