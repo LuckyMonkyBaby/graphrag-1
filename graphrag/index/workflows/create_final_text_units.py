@@ -107,4 +107,75 @@ def simplify_attributes(attributes):
         return None
     
     # If it's a string, try to parse it, but only extract essential info
- 
+    if isinstance(attributes, str):
+        try:
+            attributes = json.loads(attributes)
+        except:
+            return None
+    
+    # If it's not a dictionary after parsing, return None
+    if not isinstance(attributes, dict):
+        return None
+    
+    # Create a simple structure with only essential fields
+    result = {}
+    
+    # Extract HTML info if available
+    if "html" in attributes:
+        html_data = attributes["html"]
+        if isinstance(html_data, dict):
+            # Only keep simple scalar values
+            simple_html = {}
+            for key, value in html_data.items():
+                # Only include simple fields
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    simple_html[key] = value
+            
+            if simple_html:
+                result["html"] = simple_html
+    
+    return result if result else None
+
+
+def _entities(df: pd.DataFrame) -> pd.DataFrame:
+    selected = df.loc[:, ["id", "text_unit_ids"]]
+    unrolled = selected.explode(["text_unit_ids"]).reset_index(drop=True)
+
+    return (
+        unrolled.groupby("text_unit_ids", sort=False)
+        .agg(entity_ids=("id", "unique"))
+        .reset_index()
+        .rename(columns={"text_unit_ids": "id"})
+    )
+
+
+def _relationships(df: pd.DataFrame) -> pd.DataFrame:
+    selected = df.loc[:, ["id", "text_unit_ids"]]
+    unrolled = selected.explode(["text_unit_ids"]).reset_index(drop=True)
+
+    return (
+        unrolled.groupby("text_unit_ids", sort=False)
+        .agg(relationship_ids=("id", "unique"))
+        .reset_index()
+        .rename(columns={"text_unit_ids": "id"})
+    )
+
+
+def _covariates(df: pd.DataFrame) -> pd.DataFrame:
+    selected = df.loc[:, ["id", "text_unit_id"]]
+
+    return (
+        selected.groupby("text_unit_id", sort=False)
+        .agg(covariate_ids=("id", "unique"))
+        .reset_index()
+        .rename(columns={"text_unit_id": "id"})
+    )
+
+
+def _join(left, right):
+    return left.merge(
+        right,
+        on="id",
+        how="left",
+        suffixes=["_1", "_2"],
+    )
