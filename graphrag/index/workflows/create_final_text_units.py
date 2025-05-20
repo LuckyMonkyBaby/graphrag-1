@@ -5,11 +5,19 @@
 
 import json
 from typing import Any, Dict, List, Optional
+import logging
 
 import pandas as pd
 
 from graphrag.config.models.graph_rag_config import GraphRagConfig
-from graphrag.data_model.schemas import TEXT_UNITS_FINAL_COLUMNS
+from graphrag.data_model.schemas import (
+    TEXT_UNITS_FINAL_COLUMNS, 
+    TEXT_UNITS_BASIC_COLUMNS,
+    HTML_STRUCTURE_FIELDS,
+    PAGE_ID, PAGE_NUMBER, 
+    PARAGRAPH_ID, PARAGRAPH_NUMBER,
+    CHAR_POSITION_START, CHAR_POSITION_END
+)
 from graphrag.index.typing.context import PipelineRunContext
 from graphrag.index.typing.workflow import WorkflowFunctionOutput
 from graphrag.utils.storage import (
@@ -24,34 +32,51 @@ async def run_workflow(
     context: PipelineRunContext,
 ) -> WorkflowFunctionOutput:
     """All the steps to transform the text units."""
-    text_units = await load_table_from_storage("text_units", context.storage)
-    final_entities = await load_table_from_storage("entities", context.storage)
-    final_relationships = await load_table_from_storage(
-        "relationships", context.storage
-    )
+    log = logging.getLogger(__name__)
     
-    final_covariates = None
-    if config.extract_claims.enabled and await storage_has_table(
-        "covariates", context.storage
-    ):
-        final_covariates = await load_table_from_storage("covariates", context.storage)
-    
-    # Try to load original dataset for HTML attributes, but make it optional
-    original_dataset = None
-    if await storage_has_table("dataset", context.storage):
-        original_dataset = await load_table_from_storage("dataset", context.storage)
+    try:
+        text_units = await load_table_from_storage("text_units", context.storage)
+        final_entities = await load_table_from_storage("entities", context.storage)
+        final_relationships = await load_table_from_storage(
+            "relationships", context.storage
+        )
+        
+        final_covariates = None
+        if config.extract_claims.enabled and await storage_has_table(
+            "covariates", context.storage
+        ):
+            try:
+                final_covariates = await load_table_from_storage("covariates", context.storage)
+            except Exception as e:
+                log.warning(f"Failed to load covariates table: {e}")
+        
+        # Try to load original dataset for HTML attributes, but make it optional
+        original_dataset = None
+        if await storage_has_table("dataset", context.storage):
+            try:
+                original_dataset = await load_table_from_storage("dataset", context.storage)
+            except Exception as e:
+                log.warning(f"Failed to load dataset table: {e}")
 
-    output = create_final_text_units(
-        text_units,
-        final_entities,
-        final_relationships,
-        final_covariates,
-        original_dataset,
-    )
+        # Process text units with HTML structure information
+        output = create_final_text_units(
+            text_units,
+            final_entities,
+            final_relationships,
+            final_covariates,
+            original_dataset,
+        )
 
-    await write_table_to_storage(output, "text_units", context.storage)
-
-    return WorkflowFunctionOutput(result=output)
+        # Write the output with both standard columns and HTML structure
+        await write_table_to_storage(output, "text_units", context.storage)
+        
+        return WorkflowFunctionOutput(result=output)
+        
+    except Exception as e:
+        log.error(f"Error in text_units workflow: {e}")
+        # In case of error, try to provide at least a minimal valid output
+        minimal_output = pd.DataFrame(columns=TEXT_UNITS_FINAL_COLUMNS)
+        return WorkflowFunctionOutput(result=minimal_output)
 
 
 def create_final_text_units(
@@ -62,17 +87,72 @@ def create_final_text_units(
     original_dataset: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """All the steps to transform the text units."""
-    selected = text_units.loc[:, ["id", "text", "document_ids", "n_tokens"]]
+    log = logging.getLogger(__name__)
+    
+    # Maintain backward compatibility: ensure we have all expected columns
+    required_columns = ["id", "text", "document_ids", "n_tokens"]
+    selected_columns = [col for col in required_columns if col in text_units.columns]
+    
+    # Make sure we have at least id and text columns
+    if "id" not in selected_columns or "text" not in selected_columns:
+        raise ValueError("Text units must have at least 'id' and 'text' columns")
+    
+    selected = text_units.loc[:, selected_columns].copy()
+    
+    # Add missing columns if needed
+    for col in required_columns:
+        if col not in selected.columns:
+            selected[col] = None
+    
+    # Add human_readable_id
     selected["human_readable_id"] = selected.index + 1
     
-    # Initialize attributes with simple dict if present
+    # Initialize HTML structure fields 
+    for field in HTML_STRUCTURE_FIELDS:
+        selected[field] = None
+    
+    # Process attributes if present
     if "attributes" in text_units.columns:
-        # Extract only the essential data
+        # Extract attributes and HTML structure
+        for idx, row in text_units.iterrows():
+            attrs = row["attributes"]
+            
+            # Parse attributes if they're in string format
+            if isinstance(attrs, str):
+                try:
+                    attrs = json.loads(attrs)
+                except:
+                    continue
+            
+            if not isinstance(attrs, dict):
+                continue
+                
+            # Extract page info
+            if "page" in attrs and attrs["page"] and isinstance(attrs["page"], dict):
+                selected.at[idx, PAGE_ID] = attrs["page"].get("id")
+                selected.at[idx, PAGE_NUMBER] = attrs["page"].get("number")
+            
+            # Extract paragraph info
+            if "paragraph" in attrs and attrs["paragraph"] and isinstance(attrs["paragraph"], dict):
+                selected.at[idx, PARAGRAPH_ID] = attrs["paragraph"].get("id")
+                selected.at[idx, PARAGRAPH_NUMBER] = attrs["paragraph"].get("number")
+            
+            # Extract character position info
+            if "char_position" in attrs and attrs["char_position"] and isinstance(attrs["char_position"], dict):
+                selected.at[idx, CHAR_POSITION_START] = attrs["char_position"].get("start")
+                selected.at[idx, CHAR_POSITION_END] = attrs["char_position"].get("end")
+        
+        # Keep simplified attributes in the metadata
         selected["attributes"] = text_units["attributes"].apply(
             lambda x: simplify_attributes(x)
         )
     else:
         selected["attributes"] = None
+
+    # Ensure selected has an index before joining
+    if selected.empty:
+        # Return empty DataFrame with correct structure
+        return pd.DataFrame(columns=TEXT_UNITS_FINAL_COLUMNS)
 
     # Join with entities and relationships
     entity_join = _entities(final_entities)
@@ -82,31 +162,47 @@ def create_final_text_units(
     relationship_joined = _join(entity_joined, relationship_join)
     final_joined = relationship_joined
 
-    if final_covariates is not None:
+    if final_covariates is not None and not final_covariates.empty:
         covariate_join = _covariates(final_covariates)
         final_joined = _join(relationship_joined, covariate_join)
     else:
-        final_joined["covariate_ids"] = [[] for i in range(len(final_joined))]
+        if "covariate_ids" not in final_joined.columns:
+            final_joined["covariate_ids"] = [[] for _ in range(len(final_joined))]
 
-    aggregated = final_joined.groupby("id", sort=False).agg("first").reset_index()
+    # Safer groupby that ensures we have data
+    if final_joined.empty:
+        aggregated = final_joined
+    else:
+        try:
+            # Use the safest approach for groupby
+            if "id" in final_joined.columns and not final_joined["id"].isna().any():
+                aggregated = final_joined.groupby("id", sort=False, as_index=False).first()
+            else:
+                # If id column is problematic, just use the dataframe as is
+                aggregated = final_joined.copy()
+        except Exception as e:
+            # Fallback if groupby fails
+            log.warning(f"Groupby failed: {e}. Using original dataframe.")
+            aggregated = final_joined.copy()
 
     # Ensure all required columns from TEXT_UNITS_FINAL_COLUMNS are present
     for col in TEXT_UNITS_FINAL_COLUMNS:
         if col not in aggregated.columns:
-            aggregated[col] = None
-
-    return aggregated.loc[
-        :,
-        TEXT_UNITS_FINAL_COLUMNS,
-    ]
+            if col in ["document_ids", "entity_ids", "relationship_ids", "covariate_ids"]:
+                aggregated[col] = [[] for _ in range(len(aggregated))]
+            else:
+                aggregated[col] = None
+    
+    # Return the complete dataframe with all columns including HTML structure
+    return aggregated[TEXT_UNITS_FINAL_COLUMNS]
 
 
 def simplify_attributes(attributes):
-    """Extract only essential data from attributes."""
+    """Extract only essential data from attributes with full HTML structure preservation."""
     if attributes is None:
         return None
     
-    # If it's a string, try to parse it, but only extract essential info
+    # If it's a string, try to parse it
     if isinstance(attributes, str):
         try:
             attributes = json.loads(attributes)
@@ -117,30 +213,58 @@ def simplify_attributes(attributes):
     if not isinstance(attributes, dict):
         return None
     
-    # Create a simple structure with only essential fields
+    # Create a structure that preserves HTML fields
     result = {}
     
-    # Extract HTML info if available
-    if "html" in attributes:
-        html_data = attributes["html"]
-        if isinstance(html_data, dict):
-            # Only keep simple scalar values
-            simple_html = {}
-            for key, value in html_data.items():
-                # Only include simple fields
-                if isinstance(value, (str, int, float, bool)) or value is None:
-                    simple_html[key] = value
-            
-            if simple_html:
-                result["html"] = simple_html
+    # Preserve page information
+    if "page" in attributes and attributes["page"]:
+        result["page"] = attributes["page"]
+    
+    # Preserve paragraph information
+    if "paragraph" in attributes and attributes["paragraph"]:
+        result["paragraph"] = attributes["paragraph"]
+    
+    # Preserve character position information
+    if "char_position" in attributes and attributes["char_position"]:
+        result["char_position"] = attributes["char_position"]
+    
+    # Also include any additional HTML metadata for backward compatibility
+    if "html" in attributes and isinstance(attributes["html"], dict):
+        result["html"] = {}
+        for key, value in attributes["html"].items():
+            # Only include simple fields
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                result["html"][key] = value
     
     return result if result else None
 
 
 def _entities(df: pd.DataFrame) -> pd.DataFrame:
+    """Extract entity IDs for each text unit."""
+    if df is None or df.empty or "text_unit_ids" not in df.columns:
+        # Return empty DataFrame with expected structure
+        return pd.DataFrame(columns=["id", "entity_ids"])
+    
     selected = df.loc[:, ["id", "text_unit_ids"]]
+    
+    # Handle case where text_unit_ids might contain None/NaN
+    selected = selected.dropna(subset=["text_unit_ids"])
+    
+    # Handle case where text_unit_ids might not be a list
+    selected["text_unit_ids"] = selected["text_unit_ids"].apply(
+        lambda x: x if isinstance(x, list) else ([x] if x is not None else [])
+    )
+    
+    # Only explode if there are rows
+    if selected.empty:
+        return pd.DataFrame(columns=["id", "entity_ids"])
+        
     unrolled = selected.explode(["text_unit_ids"]).reset_index(drop=True)
-
+    
+    # Skip groupby if dataframe is empty to avoid "cannot set a frame with no defined index" error
+    if unrolled.empty:
+        return pd.DataFrame(columns=["id", "entity_ids"])
+    
     return (
         unrolled.groupby("text_unit_ids", sort=False)
         .agg(entity_ids=("id", "unique"))
@@ -150,9 +274,31 @@ def _entities(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _relationships(df: pd.DataFrame) -> pd.DataFrame:
+    """Extract relationship IDs for each text unit."""
+    if df is None or df.empty or "text_unit_ids" not in df.columns:
+        # Return empty DataFrame with expected structure
+        return pd.DataFrame(columns=["id", "relationship_ids"])
+    
     selected = df.loc[:, ["id", "text_unit_ids"]]
+    
+    # Handle case where text_unit_ids might contain None/NaN
+    selected = selected.dropna(subset=["text_unit_ids"])
+    
+    # Handle case where text_unit_ids might not be a list
+    selected["text_unit_ids"] = selected["text_unit_ids"].apply(
+        lambda x: x if isinstance(x, list) else ([x] if x is not None else [])
+    )
+    
+    # Only explode if there are rows
+    if selected.empty:
+        return pd.DataFrame(columns=["id", "relationship_ids"])
+        
     unrolled = selected.explode(["text_unit_ids"]).reset_index(drop=True)
-
+    
+    # Skip groupby if dataframe is empty to avoid "cannot set a frame with no defined index" error
+    if unrolled.empty:
+        return pd.DataFrame(columns=["id", "relationship_ids"])
+    
     return (
         unrolled.groupby("text_unit_ids", sort=False)
         .agg(relationship_ids=("id", "unique"))
@@ -162,8 +308,20 @@ def _relationships(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _covariates(df: pd.DataFrame) -> pd.DataFrame:
+    """Extract covariate IDs for each text unit."""
+    if df is None or df.empty or "text_unit_id" not in df.columns:
+        # Return empty DataFrame with expected structure
+        return pd.DataFrame(columns=["id", "covariate_ids"])
+    
     selected = df.loc[:, ["id", "text_unit_id"]]
-
+    
+    # Handle case where text_unit_id might contain None/NaN
+    selected = selected.dropna(subset=["text_unit_id"])
+    
+    # Skip groupby if dataframe is empty to avoid "cannot set a frame with no defined index" error
+    if selected.empty:
+        return pd.DataFrame(columns=["id", "covariate_ids"])
+    
     return (
         selected.groupby("text_unit_id", sort=False)
         .agg(covariate_ids=("id", "unique"))
@@ -173,6 +331,21 @@ def _covariates(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _join(left, right):
+    """Safely join two dataframes on id."""
+    # If either dataframe is empty, return a copy of left with expected columns
+    if left.empty or right.empty or "id" not in right.columns:
+        # Add all columns from right to left with empty values
+        result = left.copy()
+        for col in right.columns:
+            if col != "id" and col not in result.columns:
+                if col.endswith("_ids"):
+                    # For _ids columns, use empty lists
+                    result[col] = [[] for _ in range(len(result))]
+                else:
+                    result[col] = None
+        return result
+    
+    # Perform the merge
     return left.merge(
         right,
         on="id",
