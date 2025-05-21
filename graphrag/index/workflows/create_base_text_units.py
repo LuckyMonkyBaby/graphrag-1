@@ -333,8 +333,10 @@ def create_base_text_units(
     )
     
     # Convert attributes to JSON string for serialization
-    log.info("Converting attributes to JSON strings")
-    aggregated["attributes"] = aggregated["attributes"].apply(json.dumps)
+    log.info("Ensuring attributes are in a serializable format")
+    aggregated["attributes"] = aggregated["attributes"].apply(
+        lambda x: json.dumps(x) if isinstance(x, dict) else (x if isinstance(x, str) else "{}")
+    )
     
     # Filter out rows with no text and reset index
     log.info("Filtering out rows with no text")
@@ -345,6 +347,24 @@ def create_base_text_units(
     result = cast(
         "pd.DataFrame", aggregated[aggregated["text"].notna()].reset_index(drop=True)
     )
+    
+    # Add summary of attributes extraction for final report
+    if html_attributes_present:
+        try:
+            # Parse attributes back to dicts for counting
+            parsed_attrs = result["attributes"].apply(
+                lambda x: json.loads(x) if isinstance(x, str) else x
+            )
+            
+            # Count successful extractions
+            page_ids = parsed_attrs.apply(lambda x: x.get("page_id") is not None).sum()
+            paragraph_ids = parsed_attrs.apply(lambda x: x.get("para_id") is not None).sum()
+            char_positions = parsed_attrs.apply(lambda x: x.get("char_start") is not None).sum()
+            
+            log.info(f"HTML attribute extraction results: {{'page_ids': {page_ids}, 'paragraph_ids': {paragraph_ids}, 'char_positions': {char_positions}}}")
+        except Exception as e:
+            log.error(f"Error while generating attribute statistics: {e}")
+    
     log.info(f"Final result has {len(result)} rows")
     
     return result

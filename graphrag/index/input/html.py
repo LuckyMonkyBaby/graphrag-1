@@ -117,6 +117,17 @@ async def load_html(
         new_item["title"] = document_structure.get("title", str(Path(path).name))
         new_item["creation_date"] = await storage.get_creation_date(path)
         
+        # Add HTML attributes directly as a column for extraction in create_base_text_units
+        log.info("Adding HTML attributes as a dedicated column")
+        html_attributes = {
+            "pages": document_structure.get("pages", []),
+            "paragraphs": document_structure.get("paragraphs", [])
+        }
+        new_item["html_attributes"] = html_attributes
+        
+        # Log the HTML attributes structure
+        log.info(f"HTML attributes added with {len(html_attributes['pages'])} pages and {len(html_attributes['paragraphs'])} paragraphs")
+        
         log.info(f"Created document entry with ID: {new_item['id']}, Title: {new_item['title']}")
         
         # Process data columns based on config
