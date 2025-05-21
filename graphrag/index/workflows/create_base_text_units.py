@@ -168,8 +168,7 @@ async def run_workflow(
                 except:
                     log.error(f"Column '{col}' has complex types that couldn't be analyzed")
     
-    log.info("Workflow execution completed")[col].apply(type).unique()
-                log.error(f"Column '{col}' contains types: {sample_types}")
+                log.info("Workflow execution completed")[col].apply(type).unique()
     
     try:
         await write_table_to_storage(output, "text_units", context.storage)
