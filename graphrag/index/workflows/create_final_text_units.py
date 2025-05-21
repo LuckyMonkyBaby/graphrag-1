@@ -1,4 +1,112 @@
-# Copyright (c) 2024 Microsoft Corporation.
+# Check if the HTML structure columns already exist in text_units
+    html_structure_columns = [
+        PAGE_ID, PAGE_NUMBER, PARAGRAPH_ID, PARAGRAPH_NUMBER,
+        CHAR_POSITION_START, CHAR_POSITION_END
+    ]
+    
+    # If the HTML structure columns already exist in text_units, use those values directly
+    html_columns_exist = all(col in text_units.columns for col in html_structure_columns)
+    
+    if html_columns_exist:
+        log.info("Using existing HTML structure columns from text_units")
+        for field in html_structure_columns:
+            selected[field] = text_units[field].values
+    else:
+        log.info("HTML structure columns not found in text_units, extracting from attributes")
+        # Process attributes if present
+        if "attributes" in text_units.columns:
+            # Extract attributes and HTML structure
+            for idx, row in text_units.iterrows():
+                attrs = row["attributes"]
+                
+                # Parse attributes if they're in string format
+                if isinstance(attrs, str):
+                    try:
+                        attrs = json.loads(attrs)
+                        log.debug(f"Successfully parsed attributes for row {idx}")
+                    except Exception as e:
+                        log.warning(f"Failed to parse attributes for row {idx}: {e}")
+                        continue
+                
+                if not isinstance(attrs, dict):
+                    log.warning(f"Attributes for row {idx} is not a dictionary: {type(attrs)}")
+                    continue
+                
+                # Extract page info with better error handling
+                if "page" in attrs and attrs["page"] and isinstance(attrs["page"], dict):
+                    try:
+                        # Convert page number to int if it's a numeric string
+                        page_number = attrs["page"].get("number")
+                        if page_number is not None:
+                            try:
+                                page_number = int(page_number)
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        selected.at[idx, PAGE_ID] = attrs["page"].get("id")
+                        selected.at[idx, PAGE_NUMBER] = page_number
+                        log.debug(f"Row {idx}: Extracted page {attrs['page'].get('id')}, number {page_number}")
+                    except Exception as e:
+                        log.warning(f"Error extracting page info for row {idx}: {e}")
+                
+                # Extract paragraph info with better error handling
+                if "paragraph" in attrs and attrs["paragraph"] and isinstance(attrs["paragraph"], dict):
+                    try:
+                        # Convert paragraph number to int if it's a numeric string
+                        para_number = attrs["paragraph"].get("number")
+                        if para_number is not None:
+                            try:
+                                para_number = int(para_number)
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        selected.at[idx, PARAGRAPH_ID] = attrs["paragraph"].get("id")
+                        selected.at[idx, PARAGRAPH_NUMBER] = para_number
+                        log.debug(f"Row {idx}: Extracted paragraph {attrs['paragraph'].get('id')}, number {para_number}")
+                    except Exception as e:
+                        log.warning(f"Error extracting paragraph info for row {idx}: {e}")
+                
+                # Extract character position info with better error handling
+                if "char_position" in attrs and attrs["char_position"] and isinstance(attrs["char_position"], dict):
+                    try:
+                        # Convert position values to int if they're numeric strings
+                        char_start = attrs["char_position"].get("start")
+                        char_end = attrs["char_position"].get("end")
+                        
+                        if char_start is not None:
+                            try:
+                                char_start = int(char_start)
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        if char_end is not None:
+                            try:
+                                char_end = int(char_end)
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        selected.at[idx, CHAR_POSITION_START] = char_start
+                        selected.at[idx, CHAR_POSITION_END] = char_end
+                        log.debug(f"Row {idx}: Extracted char positions {char_start} to {char_end}")
+                    except Exception as e:
+                        log.warning(f"Error extracting char position for row {idx}: {e}")
+    
+    # Log attribute column counts
+    attribute_counts = {
+        'page_ids': selected[PAGE_ID].notna().sum(),
+        'paragraph_ids': selected[PARAGRAPH_ID].notna().sum(),
+        'char_positions': selected[CHAR_POSITION_START].notna().sum()
+    }
+    log.info(f"HTML attribute column counts: {attribute_counts}")
+    
+    # Process attributes if present - keep simplified attributes for backwards compatibility
+    if "attributes" in text_units.columns:
+        # Keep simplified attributes in the metadata, but prioritize existing columns
+        selected["attributes"] = text_units["attributes"].apply(
+            lambda x: simplify_attributes(x)
+        )
+    else:
+        selected["attributes"] = None# Copyright (c) 2024 Microsoft Corporation.
 # Licensed under the MIT License
 
 """A module containing run_workflow method definition."""
