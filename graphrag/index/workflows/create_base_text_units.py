@@ -220,7 +220,7 @@ def create_base_text_units(
         row["chunks"] = chunked
         return row
     
-            # Apply chunker
+    # Apply chunker
     log.info("Chunking documents")
     aggregated = aggregated.apply(lambda row: chunker(row), axis=1)
     
@@ -258,7 +258,8 @@ def create_base_text_units(
             chunks_df.columns = ["document_ids", "text", "n_tokens", "metadata"]
             # Convert metadata to string to avoid mixed type issues
             chunk_metadata = chunks_df["metadata"].apply(
-                lambda x: json.dumps(x) if isinstance(x, dict) else None
+                lambda x: json.dumps(x) if isinstance(x, dict) else 
+                          (x if isinstance(x, str) else None)
             )
             aggregated["chunk_metadata"] = chunk_metadata
         else:
@@ -302,7 +303,10 @@ def create_base_text_units(
         )
         
         # Convert attributes to JSON strings to prevent Parquet issues
-        aggregated["attributes"] = aggregated["attributes"].apply(json.dumps)
+        # IMPORTANT: Always store as JSON string, never as dict
+        aggregated["attributes"] = aggregated["attributes"].apply(
+            lambda x: json.dumps(x) if x is not None else "{}"
+        )
         
         # Remove temporary column
         if "chunk_metadata" in aggregated.columns:
@@ -330,9 +334,9 @@ def create_attributes(metadata_str) -> dict:
         try:
             metadata = json.loads(metadata_str)
         except:
-            metadata = {}
+            return attributes
     
-    # Create simple structure with HTML info
+    # Create simplified structure with HTML info
     if isinstance(metadata, dict) and "html" in metadata:
         html = metadata.get("html", {})
         if isinstance(html, dict):
@@ -344,4 +348,10 @@ def create_attributes(metadata_str) -> dict:
                 "paragraph_count": html.get("paragraph_count", 0)
             }
     
+    # Include page, paragraph, and char_position if present
+    for key in ["page", "paragraph", "char_position"]:
+        if key in attributes and attributes[key]:
+            result[key] = attributes[key]
+    
     return attributes
+

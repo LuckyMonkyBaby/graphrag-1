@@ -92,13 +92,13 @@ def create_final_text_units(
     
     # Process attributes column if it exists
     if "attributes" in text_units.columns:
-        # Parse and simplify attributes
+        # Parse and simplify attributes - ensure it's always a JSON string
         selected["attributes"] = text_units["attributes"].apply(
-            lambda x: simplify_attributes(x)
+            lambda x: json.dumps(simplify_attributes(x))
         )
     else:
-        # Create empty attributes
-        selected["attributes"] = None
+        # Create empty attributes as JSON strings
+        selected["attributes"] = ["{}"] * len(selected)
     
     # Join with entities and relationships
     entity_join = _entities(final_entities)
@@ -118,6 +118,16 @@ def create_final_text_units(
 
     # Group and aggregate results
     try:
+        # Ensure consistent types before groupby
+        for col in final_joined.columns:
+            if col.endswith('_ids'):
+                # Ensure list columns are consistently lists
+                final_joined[col] = final_joined[col].apply(
+                    lambda x: [] if x is None else 
+                              (x if isinstance(x, list) else [x])
+                )
+        
+        # Group by id and take first value (after ensuring consistent types)
         aggregated = final_joined.groupby("id", sort=False).agg("first").reset_index()
     except Exception as e:
         log.warning(f"Error in groupby operation: {e}. Using original dataframe.")
@@ -130,6 +140,23 @@ def create_final_text_units(
                 aggregated[col] = [[] for _ in range(len(aggregated))]
             else:
                 aggregated[col] = None
+    
+    # Ensure all lists are properly formatted - double check for Parquet compatibility
+    for col in ["document_ids", "entity_ids", "relationship_ids", "covariate_ids"]:
+        if col in aggregated.columns:
+            aggregated[col] = aggregated[col].apply(
+                lambda x: [] if x is None else (x if isinstance(x, list) else [x])
+            )
+    
+    # Final check for any complex data types in non-list columns
+    for col in aggregated.columns:
+        if col not in ["document_ids", "entity_ids", "relationship_ids", "covariate_ids"] and col != "attributes":
+            # Ensure non-list columns don't contain complex objects
+            if aggregated[col].apply(lambda x: isinstance(x, (dict, list))).any():
+                # Convert any dict/list to strings to ensure Parquet compatibility
+                aggregated[col] = aggregated[col].apply(
+                    lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x
+                )
 
     return aggregated.loc[:, TEXT_UNITS_FINAL_COLUMNS]
 
@@ -144,11 +171,11 @@ def simplify_attributes(attrs):
         try:
             attrs = json.loads(attrs)
         except json.JSONDecodeError:
-            return None
+            return {}
     
-    # If not a dictionary, return None
+    # If not a dictionary, return empty dict
     if not isinstance(attrs, dict):
-        return None
+        return {}
     
     # Create simplified version keeping HTML structure fields
     result = {}
@@ -193,7 +220,7 @@ def _entities(df: pd.DataFrame) -> pd.DataFrame:
 
     return (
         unrolled.groupby("text_unit_ids", sort=False)
-        .agg(entity_ids=("id", "unique"))
+        .agg(entity_ids=("id", lambda x: list(pd.Series(x).unique())))  # Ensure list output
         .reset_index()
         .rename(columns={"text_unit_ids": "id"})
     )
@@ -223,7 +250,7 @@ def _relationships(df: pd.DataFrame) -> pd.DataFrame:
 
     return (
         unrolled.groupby("text_unit_ids", sort=False)
-        .agg(relationship_ids=("id", "unique"))
+        .agg(relationship_ids=("id", lambda x: list(pd.Series(x).unique())))  # Ensure list output
         .reset_index()
         .rename(columns={"text_unit_ids": "id"})
     )
@@ -246,7 +273,7 @@ def _covariates(df: pd.DataFrame) -> pd.DataFrame:
 
     return (
         selected.groupby("text_unit_id", sort=False)
-        .agg(covariate_ids=("id", "unique"))
+        .agg(covariate_ids=("id", lambda x: list(pd.Series(x).unique())))  # Ensure list output
         .reset_index()
         .rename(columns={"text_unit_id": "id"})
     )
