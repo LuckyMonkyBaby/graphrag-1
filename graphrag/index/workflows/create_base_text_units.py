@@ -168,20 +168,6 @@ async def run_workflow(
                 except:
                     log.error(f"Column '{col}' has complex types that couldn't be analyzed")
     
-                log.info("Workflow execution completed")[col].apply(type).unique()
-    
-    try:
-        await write_table_to_storage(output, "text_units", context.storage)
-        log.info("Successfully wrote text_units to storage")
-    except Exception as e:
-        log.error(f"Error writing text_units to storage: {e}")
-        # Try to provide more detailed error information
-        log.error(f"Column types in output: {output.dtypes}")
-        for col in output.columns:
-            if output[col].dtype == 'object':
-                sample_types = output[col].apply(type).unique()
-                log.error(f"Column '{col}' contains types: {sample_types}")
-    
     log.info("Workflow execution completed")
 
     return WorkflowFunctionOutput(result=output)
@@ -218,11 +204,20 @@ def create_base_text_units(
         agg_dict["metadata"] = "first"  # type: ignore
         log.debug("Including metadata in aggregation")
     
-    # Handle HTML attributes if they exist
-    html_attributes_present = "html_attributes" in documents.columns
-    if html_attributes_present:
-        agg_dict["html_attributes"] = "first"  # type: ignore
-        log.info("HTML attributes column detected - will be included in processing")
+    # Check for HTML structure in the metadata only
+    has_html_in_metadata = False
+    if "metadata" in documents.columns:
+        # Check if any document has HTML structure in metadata
+        try:
+            has_html_in_metadata = documents["metadata"].apply(
+                lambda m: isinstance(m, dict) and "html" in m 
+                or (isinstance(m, str) and "html" in m)
+            ).any()
+            
+            if has_html_in_metadata:
+                log.info("Detected HTML structure in document metadata - will be included in processing")
+        except Exception as e:
+            log.warning(f"Error checking for HTML in metadata: {e}")
 
     log.info(f"Aggregating documents by {'group columns' if len(group_by_columns) > 0 else 'single group'}")
     aggregated = (
@@ -331,9 +326,11 @@ def create_base_text_units(
 
     # Determine columns to keep
     columns_to_keep = [*group_by_columns, "chunks"]
-    if html_attributes_present:
-        columns_to_keep.append("html_attributes")
-        log.debug("Including html_attributes column in output")
+    
+    # Always include metadata
+    if "metadata" in aggregated.columns:
+        columns_to_keep.append("metadata")
+        log.debug("Including metadata column in output")
     
     log.info(f"Keeping columns: {columns_to_keep}")
     aggregated = cast("pd.DataFrame", aggregated[columns_to_keep])
@@ -389,18 +386,18 @@ def create_base_text_units(
             aggregated["n_tokens"] = None
             log.warning("No n_tokens column available")
     
-    # Process HTML attributes to extract essential info
-    if html_attributes_present:
-        log.info("Processing HTML attributes for each chunk")
+    # Process HTML structure to extract essential info from metadata.html only
+    if has_html_in_metadata:
+        log.info("Processing HTML structure from metadata for each chunk")
         # Create attributes column with HTML information
         aggregated["attributes"] = aggregated.apply(
             lambda row: extract_html_attributes(row), axis=1
         )
         sample_attrs = aggregated["attributes"].iloc[0] if len(aggregated) > 0 else {}
-        log.debug(f"Sample attributes structure: {json.dumps(sample_attrs, indent=2)}")
+        log.debug(f"Sample attributes structure: {json.dumps(sample_attrs, indent=2) if isinstance(sample_attrs, dict) else sample_attrs}")
     else:
         # Ensure attributes column exists with empty dict value
-        log.info("No HTML attributes present, creating empty attributes")
+        log.info("No HTML structure in metadata, creating empty attributes")
         aggregated["attributes"] = [{}] * len(aggregated)
     
     # Ensure document_ids is always a list
@@ -426,7 +423,7 @@ def create_base_text_units(
     )
     
     # Add summary of attributes extraction for final report
-    if html_attributes_present:
+    if has_html_in_metadata:
         try:
             # Parse attributes back to dicts for counting
             parsed_attrs = result["attributes"].apply(
@@ -434,9 +431,9 @@ def create_base_text_units(
             )
             
             # Count successful extractions
-            page_ids = parsed_attrs.apply(lambda x: x.get("page_id") is not None).sum()
-            paragraph_ids = parsed_attrs.apply(lambda x: x.get("para_id") is not None).sum()
-            char_positions = parsed_attrs.apply(lambda x: x.get("char_start") is not None).sum()
+            page_ids = parsed_attrs.apply(lambda x: x.get("page") is not None and x.get("page", {}).get("id") is not None).sum()
+            paragraph_ids = parsed_attrs.apply(lambda x: x.get("paragraph") is not None and x.get("paragraph", {}).get("id") is not None).sum()
+            char_positions = parsed_attrs.apply(lambda x: x.get("char_position") is not None and x.get("char_position", {}).get("start") is not None).sum()
             
             log.info(f"HTML attribute extraction results: {{'page_ids': {page_ids}, 'paragraph_ids': {paragraph_ids}, 'char_positions': {char_positions}}}")
         except Exception as e:
@@ -448,7 +445,7 @@ def create_base_text_units(
 
 
 def extract_html_attributes(row: pd.Series) -> Dict[str, Any]:
-    """Extract HTML attributes from existing html_attributes.hgh"""
+    """Extract HTML attributes from metadata.html only."""
     chunk_id = row.get("id", "unknown")
     log.debug(f"Extracting HTML attributes for chunk {chunk_id}")
     
@@ -462,16 +459,29 @@ def extract_html_attributes(row: pd.Series) -> Dict[str, Any]:
         }
     }
     
-    # Get text content for matching
+    # Get text content and position for matching
     chunk_text = row.get("text", "")
     if not chunk_text:
         log.debug(f"No text content found for chunk {chunk_id}")
         return attributes
     
-    # Get HTML attributes
-    html_attrs = row.get("html_attributes")
+    # Get HTML structure from metadata.html only
+    metadata = row.get("metadata")
+    html_attrs = None
+    
+    if metadata:
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except:
+                metadata = None
+        
+        if isinstance(metadata, dict) and "html" in metadata:
+            html_attrs = metadata.get("html")
+            log.debug(f"Found HTML structure in metadata for chunk {chunk_id}")
+    
     if not html_attrs:
-        log.debug(f"No HTML attributes found for chunk {chunk_id}")
+        log.debug(f"No HTML structure found for chunk {chunk_id}")
         return attributes
     
     log.debug(f"HTML attributes type: {type(html_attrs)}")
@@ -484,3 +494,164 @@ def extract_html_attributes(row: pd.Series) -> Dict[str, Any]:
         except json.JSONDecodeError:
             log.warning(f"Failed to parse HTML attributes JSON for chunk {chunk_id}")
             return attributes
+    
+    if not isinstance(html_attrs, dict):
+        log.warning(f"HTML attributes for chunk {chunk_id} is not a dictionary: {type(html_attrs)}")
+        return attributes
+    
+    # First, try to find a direct match with the chunk text
+    # This works best when the chunks align with paragraphs
+    if "paragraphs" in html_attrs and isinstance(html_attrs["paragraphs"], list):
+        log.debug(f"Searching for chunk in {len(html_attrs['paragraphs'])} paragraphs")
+        
+        # Clean chunk text for comparison (remove extra whitespace)
+        clean_chunk_text = " ".join(chunk_text.split())
+        
+        # Try to find an exact match
+        for para in html_attrs["paragraphs"]:
+            if not isinstance(para, dict) or "text" not in para:
+                continue
+                
+            para_text = para.get("text", "")
+            # Clean paragraph text for comparison
+            clean_para_text = " ".join(para_text.split())
+            
+            # Check if chunk text is in paragraph or vice versa
+            if clean_chunk_text in clean_para_text or clean_para_text in clean_chunk_text:
+                log.debug(f"Found matching paragraph for chunk {chunk_id}")
+                
+                # Extract paragraph info
+                attributes["paragraph"] = {
+                    "id": para.get("para_id"),
+                    "number": para.get("para_num")
+                }
+                
+                # Extract character position
+                attributes["char_position"] = {
+                    "start": para.get("char_start"),
+                    "end": para.get("char_end")
+                }
+                
+                # Find the page containing this paragraph
+                if "pages" in html_attrs and isinstance(html_attrs["pages"], list):
+                    # Sort pages by char_start if available
+                    pages = sorted(
+                        [p for p in html_attrs["pages"] if isinstance(p, dict)], 
+                        key=lambda p: p.get("char_start", 0) if p.get("char_start") is not None else 0
+                    )
+                    
+                    para_start = para.get("char_start")
+                    if para_start is not None:
+                        for i, page in enumerate(pages):
+                            # If page has char_start, check if paragraph is within page
+                            page_start = page.get("char_start")
+                            page_end = page.get("char_end")
+                            
+                            if page_start is not None and page_end is not None:
+                                if page_start <= para_start < page_end:
+                                    attributes["page"] = {
+                                        "id": page.get("page_id"),
+                                        "number": page.get("page_num")
+                                    }
+                                    break
+                            # If no more specific matching is possible, use simple approach
+                            elif i < len(pages) - 1:
+                                next_page = pages[i+1]
+                                next_start = next_page.get("char_start", float('inf'))
+                                if para_start < next_start:
+                                    attributes["page"] = {
+                                        "id": page.get("page_id"),
+                                        "number": page.get("page_num")
+                                    }
+                                    break
+                
+                # Stop after finding a match
+                break
+    
+    # If we couldn't find a match with paragraphs, fall back to character positions
+    if attributes["paragraph"] is None and "pages" in html_attrs and isinstance(html_attrs["pages"], list):
+        # Try to find page by approximate character positions
+        # 1. Calculate approximate character position of this chunk in the document
+        doc_id = row.get("document_ids", [])[0] if isinstance(row.get("document_ids"), list) and row.get("document_ids") else None
+        
+        if doc_id:
+            # Find character position in original document
+            # This requires knowing the chunk's position, which we might get from chunker
+            # For now, this is a placeholder
+            approx_char_position = 0
+            
+            # Most basic approach - check if any text in the pages contains chunk text
+            clean_chunk_text = " ".join(chunk_text.split())
+            full_text = html_attrs.get("text", "")
+            
+            if full_text and clean_chunk_text:
+                approx_char_position = full_text.find(clean_chunk_text)
+                
+                if approx_char_position >= 0:
+                    log.debug(f"Found approximate character position: {approx_char_position}")
+                    
+                    # Set char position
+                    attributes["char_position"] = {
+                        "start": approx_char_position,
+                        "end": approx_char_position + len(clean_chunk_text)
+                    }
+                    
+                    # Find page containing this position
+                    pages = sorted(
+                        [p for p in html_attrs["pages"] if isinstance(p, dict)], 
+                        key=lambda p: p.get("char_start", 0) if p.get("char_start") is not None else 0
+                    )
+                    
+                    for i, page in enumerate(pages):
+                        # For each page, check if our position falls within it
+                        if i < len(pages) - 1:
+                            next_page = pages[i+1]
+                            page_start = page.get("char_start", 0)
+                            next_start = next_page.get("char_start", float('inf'))
+                            
+                            if page_start <= approx_char_position < next_start:
+                                attributes["page"] = {
+                                    "id": page.get("page_id"),
+                                    "number": page.get("page_num")
+                                }
+                                break
+                        else:
+                            # Last page
+                            attributes["page"] = {
+                                "id": page.get("page_id"),
+                                "number": page.get("page_num")
+                            }
+    
+    # If we still haven't found any page information but have pages in html_attrs,
+    # just use the first page as a fallback
+    if attributes["page"] is None and "pages" in html_attrs and isinstance(html_attrs["pages"], list) and len(html_attrs["pages"]) > 0:
+        first_page = html_attrs["pages"][0]
+        if isinstance(first_page, dict):
+            attributes["page"] = {
+                "id": first_page.get("page_id"),
+                "number": first_page.get("page_num")
+            }
+            log.debug(f"Using first page as fallback for chunk {chunk_id}")
+    
+    # Ensure values are of appropriate types for proper serialization
+    if attributes["page"] and "number" in attributes["page"] and attributes["page"]["number"] is not None:
+        try:
+            attributes["page"]["number"] = int(attributes["page"]["number"])
+        except (ValueError, TypeError):
+            pass
+            
+    if attributes["paragraph"] and "number" in attributes["paragraph"] and attributes["paragraph"]["number"] is not None:
+        try:
+            attributes["paragraph"]["number"] = int(attributes["paragraph"]["number"])
+        except (ValueError, TypeError):
+            pass
+            
+    if attributes["char_position"]:
+        for pos in ["start", "end"]:
+            if pos in attributes["char_position"] and attributes["char_position"][pos] is not None:
+                try:
+                    attributes["char_position"][pos] = int(attributes["char_position"][pos])
+                except (ValueError, TypeError):
+                    pass
+    
+    return attributes

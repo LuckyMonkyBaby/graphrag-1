@@ -130,49 +130,62 @@ def create_final_text_units(
                 log.warning(f"Attributes for row {idx} is not a dictionary: {type(attrs)}")
                 continue
             
-            # If attributes are empty or missing key fields, try to extract them using original dataset
-            if not attrs or all(attrs.get(key) is None for key in ["page", "paragraph", "char_position"]):
-                # Try to extract HTML attributes from original dataset if available
-                if original_dataset is not None and "document_ids" in row and row["document_ids"]:
-                    doc_id = row["document_ids"][0] if isinstance(row["document_ids"], list) and row["document_ids"] else None
-                    
-                    if doc_id and "id" in original_dataset.columns:
-                        matching_doc = original_dataset[original_dataset["id"] == doc_id]
-                        if not matching_doc.empty:
-                            # Create a combined row with both text_units and original dataset info
-                            combined_row = row.copy()
-                            for col in matching_doc.columns:
-                                if col not in combined_row:
-                                    combined_row[col] = matching_doc.iloc[0][col]
-                            
-                            # Try to extract HTML attributes
-                            log.debug(f"Trying to extract HTML attributes from original dataset for row {idx}")
-                            # Here we would call extract_html_attributes, but we'll use the attributes as is
-                
             # Extract page info with better error handling
             if "page" in attrs and attrs["page"] and isinstance(attrs["page"], dict):
                 try:
+                    # Convert page number to int if it's a numeric string
+                    page_number = attrs["page"].get("number")
+                    if page_number is not None:
+                        try:
+                            page_number = int(page_number)
+                        except (ValueError, TypeError):
+                            pass
+                    
                     selected.at[idx, PAGE_ID] = attrs["page"].get("id")
-                    selected.at[idx, PAGE_NUMBER] = attrs["page"].get("number")
-                    log.debug(f"Row {idx}: Extracted page {attrs['page'].get('id')}, number {attrs['page'].get('number')}")
+                    selected.at[idx, PAGE_NUMBER] = page_number
+                    log.debug(f"Row {idx}: Extracted page {attrs['page'].get('id')}, number {page_number}")
                 except Exception as e:
                     log.warning(f"Error extracting page info for row {idx}: {e}")
             
             # Extract paragraph info with better error handling
             if "paragraph" in attrs and attrs["paragraph"] and isinstance(attrs["paragraph"], dict):
                 try:
+                    # Convert paragraph number to int if it's a numeric string
+                    para_number = attrs["paragraph"].get("number")
+                    if para_number is not None:
+                        try:
+                            para_number = int(para_number)
+                        except (ValueError, TypeError):
+                            pass
+                    
                     selected.at[idx, PARAGRAPH_ID] = attrs["paragraph"].get("id")
-                    selected.at[idx, PARAGRAPH_NUMBER] = attrs["paragraph"].get("number")
-                    log.debug(f"Row {idx}: Extracted paragraph {attrs['paragraph'].get('id')}, number {attrs['paragraph'].get('number')}")
+                    selected.at[idx, PARAGRAPH_NUMBER] = para_number
+                    log.debug(f"Row {idx}: Extracted paragraph {attrs['paragraph'].get('id')}, number {para_number}")
                 except Exception as e:
                     log.warning(f"Error extracting paragraph info for row {idx}: {e}")
             
             # Extract character position info with better error handling
             if "char_position" in attrs and attrs["char_position"] and isinstance(attrs["char_position"], dict):
                 try:
-                    selected.at[idx, CHAR_POSITION_START] = attrs["char_position"].get("start")
-                    selected.at[idx, CHAR_POSITION_END] = attrs["char_position"].get("end")
-                    log.debug(f"Row {idx}: Extracted char positions {attrs['char_position'].get('start')} to {attrs['char_position'].get('end')}")
+                    # Convert position values to int if they're numeric strings
+                    char_start = attrs["char_position"].get("start")
+                    char_end = attrs["char_position"].get("end")
+                    
+                    if char_start is not None:
+                        try:
+                            char_start = int(char_start)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    if char_end is not None:
+                        try:
+                            char_end = int(char_end)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    selected.at[idx, CHAR_POSITION_START] = char_start
+                    selected.at[idx, CHAR_POSITION_END] = char_end
+                    log.debug(f"Row {idx}: Extracted char positions {char_start} to {char_end}")
                 except Exception as e:
                     log.warning(f"Error extracting char position for row {idx}: {e}")
         
@@ -261,14 +274,37 @@ def simplify_attributes(attributes):
     # Preserve page information
     if "page" in attributes and attributes["page"]:
         result["page"] = attributes["page"]
+        
+        # Ensure page number is an integer if possible
+        if isinstance(result["page"], dict) and "number" in result["page"] and result["page"]["number"] is not None:
+            try:
+                result["page"]["number"] = int(result["page"]["number"])
+            except (ValueError, TypeError):
+                pass
     
     # Preserve paragraph information
     if "paragraph" in attributes and attributes["paragraph"]:
         result["paragraph"] = attributes["paragraph"]
+        
+        # Ensure paragraph number is an integer if possible
+        if isinstance(result["paragraph"], dict) and "number" in result["paragraph"] and result["paragraph"]["number"] is not None:
+            try:
+                result["paragraph"]["number"] = int(result["paragraph"]["number"])
+            except (ValueError, TypeError):
+                pass
     
     # Preserve character position information
     if "char_position" in attributes and attributes["char_position"]:
         result["char_position"] = attributes["char_position"]
+        
+        # Ensure character positions are integers if possible
+        if isinstance(result["char_position"], dict):
+            for pos in ["start", "end"]:
+                if pos in result["char_position"] and result["char_position"][pos] is not None:
+                    try:
+                        result["char_position"][pos] = int(result["char_position"][pos])
+                    except (ValueError, TypeError):
+                        pass
     
     # Also include any additional HTML metadata for backward compatibility
     if "html" in attributes and isinstance(attributes["html"], dict):
