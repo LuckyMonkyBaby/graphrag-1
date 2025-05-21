@@ -1,30 +1,4 @@
-def create_simplified_attributes(row: pd.Series) -> Dict[str, Any]:
-    """Create a simplified attributes dictionary from extracted fields."""
-    # Build a minimal attributes structure from already extracted columns
-    attributes = {}
-    
-    # Add page info if available
-    if row.get("page_id") is not None or row.get("page_number") is not None:
-        attributes["page"] = {
-            "id": row.get("page_id"),
-            "number": row.get("page_number")
-        }
-    
-    # Add paragraph info if available
-    if row.get("paragraph_id") is not None or row.get("paragraph_number") is not None:
-        attributes["paragraph"] = {
-            "id": row.get("paragraph_id"),
-            "number": row.get("paragraph_number")
-        }
-    
-    # Add character position info if available
-    if row.get("char_position_start") is not None or row.get("char_position_end") is not None:
-        attributes["char_position"] = {
-            "start": row.get("char_position_start"),
-            "end": row.get("char_position_end")
-        }
-    
-    return attributes# Copyright (c) 2024 Microsoft Corporation.
+# Copyright (c) 2024 Microsoft Corporation.
 # Licensed under the MIT License
 
 """A module containing run_workflow method definition."""
@@ -753,5 +727,33 @@ def extract_html_attributes(row: pd.Series) -> Dict[str, Any]:
                     attributes["char_position"][pos] = int(attributes["char_position"][pos])
                 except (ValueError, TypeError):
                     pass
+    
+    return attributes
+
+def create_simplified_attributes(row: pd.Series) -> Dict[str, Any]:
+    """Create a simplified attributes dictionary from extracted fields."""
+    # Build a minimal attributes structure from already extracted columns
+    attributes = {}
+    
+    # Add page info if available
+    if row.get("page_id") is not None or row.get("page_number") is not None:
+        attributes["page"] = {
+            "id": row.get("page_id"),
+            "number": row.get("page_number")
+        }
+    
+    # Add paragraph info if available
+    if row.get("paragraph_id") is not None or row.get("paragraph_number") is not None:
+        attributes["paragraph"] = {
+            "id": row.get("paragraph_id"),
+            "number": row.get("paragraph_number")
+        }
+    
+    # Add character position info if available
+    if row.get("char_position_start") is not None or row.get("char_position_end") is not None:
+        attributes["char_position"] = {
+            "start": row.get("char_position_start"),
+            "end": row.get("char_position_end")
+        }
     
     return attributes
