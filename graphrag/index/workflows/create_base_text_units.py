@@ -168,7 +168,7 @@ async def run_workflow(
                 except:
                     log.error(f"Column '{col}' has complex types that couldn't be analyzed")
     
-    log.info("Workflow execution completed")col].apply(type).unique()
+    log.info("Workflow execution completed")[col].apply(type).unique()
                 log.error(f"Column '{col}' contains types: {sample_types}")
     
     try:
