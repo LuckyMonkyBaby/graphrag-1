@@ -404,35 +404,3 @@ def _covariates(df: pd.DataFrame) -> pd.DataFrame:
     
     # Skip groupby if dataframe is empty to avoid "cannot set a frame with no defined index" error
     if selected.empty:
-        return pd.DataFrame(columns=["id", "covariate_ids"])
-    
-    return (
-        selected.groupby("text_unit_id", sort=False)
-        .agg(covariate_ids=("id", "unique"))
-        .reset_index()
-        .rename(columns={"text_unit_id": "id"})
-    )
-
-
-def _join(left, right):
-    """Safely join two dataframes on id."""
-    # If either dataframe is empty, return a copy of left with expected columns
-    if left.empty or right.empty or "id" not in right.columns:
-        # Add all columns from right to left with empty values
-        result = left.copy()
-        for col in right.columns:
-            if col != "id" and col not in result.columns:
-                if col.endswith("_ids"):
-                    # For _ids columns, use empty lists
-                    result[col] = [[] for _ in range(len(result))]
-                else:
-                    result[col] = None
-        return result
-    
-    # Perform the merge
-    return left.merge(
-        right,
-        on="id",
-        how="left",
-        suffixes=["_1", "_2"],
-    )

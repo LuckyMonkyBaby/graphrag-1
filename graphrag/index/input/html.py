@@ -84,9 +84,6 @@ async def load_html(
             "page_count": len(document_structure.get("pages", [])),
             "paragraph_count": len(document_structure.get("paragraphs", [])),
             "encoding": encoding_to_use,
-            # Add direct references to pages and paragraphs for easy access
-            "pages": document_structure.get("pages", []),
-            "paragraphs": document_structure.get("paragraphs", [])
         }
         
         # Add detailed logging for html_info
