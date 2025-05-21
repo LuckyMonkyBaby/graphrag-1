@@ -232,6 +232,18 @@ def create_base_text_units(
     log.info(f"Aggregation resulted in {len(aggregated)} groups")
     aggregated.rename(columns={"text_with_ids": "texts"}, inplace=True)
 
+    def create_chunker_function(
+    size: int,
+    overlap: int,
+    encoding_model: str,
+    strategy: ChunkStrategyType,
+    prepend_metadata: bool = False,
+    chunk_size_includes_metadata: bool = False,
+) -> callable:
+    """Create a chunker function with the provided parameters."""
+    from graphrag.index.operations.chunk_text.chunk_text import chunk_text
+    from graphrag.index.operations.chunk_text.strategies import get_encoding_fn
+    
     def chunker(row: dict[str, Any]) -> Any:
         log.debug(f"Processing row with keys: {list(row.keys())}")
         line_delimiter = ".\n"
@@ -289,7 +301,7 @@ def create_base_text_units(
             overlap=overlap,
             encoding_model=encoding_model,
             strategy=strategy,
-            callbacks=callbacks,
+            callbacks=None,  # callbacks are not passed here to avoid reference issues
         )[0]
         log.info(f"Text chunked into {len(chunked)} chunks")
 
@@ -349,9 +361,16 @@ def create_base_text_units(
         
         row["chunks"] = chunked
         return row
+    
+    return chunker
 
-    log.info("Applying chunker to each aggregated row")
-    aggregated = aggregated.apply(lambda row: chunker(row), axis=1)
+    # First check if we can use the existing function
+    chunker_func = chunker if 'chunker' in globals() else create_chunker_function(
+        size, overlap, encoding_model, strategy, prepend_metadata, chunk_size_includes_metadata
+    )
+    
+    log.info("Applying chunker function to each aggregated row")
+    aggregated = aggregated.apply(lambda row: chunker_func(row), axis=1)
 
     # Determine columns to keep
     columns_to_keep = [*group_by_columns, "chunks", "html_structure"]
