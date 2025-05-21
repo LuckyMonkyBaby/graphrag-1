@@ -1,4 +1,126 @@
-# Check if the HTML structure columns already exist in text_units
+# Copyright (c) 2024 Microsoft Corporation.
+# Licensed under the MIT License
+
+"""A module containing run_workflow method definition."""
+
+import json
+from typing import Any, Dict, List, Optional
+import logging
+
+import pandas as pd
+
+from graphrag.config.models.graph_rag_config import GraphRagConfig
+from graphrag.data_model.schemas import (
+    TEXT_UNITS_FINAL_COLUMNS, 
+    TEXT_UNITS_BASIC_COLUMNS,
+    HTML_STRUCTURE_FIELDS,
+    PAGE_ID, PAGE_NUMBER, 
+    PARAGRAPH_ID, PARAGRAPH_NUMBER,
+    CHAR_POSITION_START, CHAR_POSITION_END
+)
+from graphrag.index.typing.context import PipelineRunContext
+from graphrag.index.typing.workflow import WorkflowFunctionOutput
+from graphrag.utils.storage import (
+    load_table_from_storage,
+    storage_has_table,
+    write_table_to_storage,
+)
+
+
+async def run_workflow(
+    config: GraphRagConfig,
+    context: PipelineRunContext,
+) -> WorkflowFunctionOutput:
+    """All the steps to transform the text units."""
+    log = logging.getLogger(__name__)
+    
+    try:
+        text_units = await load_table_from_storage("text_units", context.storage)
+        final_entities = await load_table_from_storage("entities", context.storage)
+        final_relationships = await load_table_from_storage(
+            "relationships", context.storage
+        )
+        
+        final_covariates = None
+        if config.extract_claims.enabled and await storage_has_table(
+            "covariates", context.storage
+        ):
+            try:
+                final_covariates = await load_table_from_storage("covariates", context.storage)
+            except Exception as e:
+                log.warning(f"Failed to load covariates table: {e}")
+        
+        # Try to load original dataset for HTML attributes, but make it optional
+        original_dataset = None
+        if await storage_has_table("dataset", context.storage):
+            try:
+                original_dataset = await load_table_from_storage("dataset", context.storage)
+            except Exception as e:
+                log.warning(f"Failed to load dataset table: {e}")
+
+        # Process text units with HTML structure information
+        output = create_final_text_units(
+            text_units,
+            final_entities,
+            final_relationships,
+            final_covariates,
+            original_dataset,
+        )
+
+        # Write the output with both standard columns and HTML structure
+        await write_table_to_storage(output, "text_units", context.storage)
+        
+        return WorkflowFunctionOutput(result=output)
+        
+    except Exception as e:
+        log.error(f"Error in text_units workflow: {e}")
+        # In case of error, try to provide at least a minimal valid output
+        minimal_output = pd.DataFrame(columns=TEXT_UNITS_FINAL_COLUMNS)
+        return WorkflowFunctionOutput(result=minimal_output)
+
+
+def create_final_text_units(
+    text_units: pd.DataFrame,
+    final_entities: pd.DataFrame,
+    final_relationships: pd.DataFrame,
+    final_covariates: pd.DataFrame | None,
+    original_dataset: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """All the steps to transform the text units."""
+    log = logging.getLogger(__name__)
+    
+    # Maintain backward compatibility: ensure we have all expected columns
+    required_columns = ["id", "text", "document_ids", "n_tokens"]
+    selected_columns = [col for col in required_columns if col in text_units.columns]
+    
+    # Make sure we have at least id and text columns
+    if "id" not in selected_columns or "text" not in selected_columns:
+        raise ValueError("Text units must have at least 'id' and 'text' columns")
+    
+    selected = text_units.loc[:, selected_columns].copy()
+    
+    # Add missing columns if needed
+    for col in required_columns:
+        if col not in selected.columns:
+            selected[col] = None
+    
+    # Add human_readable_id
+    selected["human_readable_id"] = selected.index + 1
+    
+    # Initialize HTML structure fields 
+    for field in HTML_STRUCTURE_FIELDS:
+        selected[field] = None
+    
+    # Process attributes if present - but we already have the structured columns
+    if "attributes" in text_units.columns:
+        # Keep simplified attributes in the metadata, but prioritize existing columns
+        selected["attributes"] = text_units["attributes"].apply(
+            lambda x: simplify_attributes(x)
+        )
+    else:
+        selected["attributes"] = None
+    
+    # Check if the HTML structure columns already exist in text_units
     html_structure_columns = [
         PAGE_ID, PAGE_NUMBER, PARAGRAPH_ID, PARAGRAPH_NUMBER,
         CHAR_POSITION_START, CHAR_POSITION_END
