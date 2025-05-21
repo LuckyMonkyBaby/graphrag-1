@@ -70,10 +70,70 @@ async def run_workflow(
                     lambda x: json.dumps(x) if isinstance(x, (dict, list)) and not isinstance(x, str) else x
                 )
     
+    # Normalize data types before storage to prevent Parquet errors
+    log.info("Normalizing column data types before storage")
+    
+    # Function to ensure consistent types
+    def normalize_column_types(df):
+        for col in df.columns:
+            # Skip index columns
+            if col == 'index':
+                continue
+                
+            # Handle columns with mixed types
+            if df[col].dtype == 'object':
+                # Check for mixed list/non-list
+                contains_list = df[col].apply(lambda x: isinstance(x, list)).any()
+                contains_nonlist = df[col].apply(lambda x: x is not None and not isinstance(x, list)).any()
+                
+                if contains_list and contains_nonlist:
+                    log.warning(f"Column '{col}' has mixed list/non-list values - converting all to JSON strings")
+                    df[col] = df[col].apply(lambda x: json.dumps(x) if x is not None else None)
+                
+                # Convert dict columns to strings
+                contains_dict = df[col].apply(lambda x: isinstance(x, dict)).any()
+                if contains_dict:
+                    log.warning(f"Column '{col}' contains dictionaries - converting to JSON strings")
+                    df[col] = df[col].apply(lambda x: json.dumps(x) if isinstance(x, dict) else x)
+        
+        return df
+    
+    # Apply normalization to both dataframes
+    documents_copy = normalize_column_types(documents_copy)
+    output = normalize_column_types(output)
+    
+    # Remove the 'chunk' column from output if it exists
+    # This column is likely causing the error
+    if 'chunk' in output.columns:
+        log.info("Removing 'chunk' column with mixed types to prevent Parquet errors")
+        output = output.drop(columns=['chunk'])
+    
     log.info("Writing processed data to storage")
-    await write_table_to_storage(documents_copy, "dataset", context.storage)
-    await write_table_to_storage(output, "text_units", context.storage)
-    log.info("Workflow execution completed successfully")
+    try:
+        await write_table_to_storage(documents_copy, "dataset", context.storage)
+        log.info("Successfully wrote documents_copy to storage")
+    except Exception as e:
+        log.error(f"Error writing documents_copy to storage: {e}")
+        # Try to provide more detailed error information
+        log.error(f"Column types in documents_copy: {documents_copy.dtypes}")
+        for col in documents_copy.columns:
+            if documents_copy[col].dtype == 'object':
+                sample_types = documents_copy[col].apply(type).unique()
+                log.error(f"Column '{col}' contains types: {sample_types}")
+    
+    try:
+        await write_table_to_storage(output, "text_units", context.storage)
+        log.info("Successfully wrote text_units to storage")
+    except Exception as e:
+        log.error(f"Error writing text_units to storage: {e}")
+        # Try to provide more detailed error information
+        log.error(f"Column types in output: {output.dtypes}")
+        for col in output.columns:
+            if output[col].dtype == 'object':
+                sample_types = output[col].apply(type).unique()
+                log.error(f"Column '{col}' contains types: {sample_types}")
+    
+    log.info("Workflow execution completed")
 
     return WorkflowFunctionOutput(result=output)
 
