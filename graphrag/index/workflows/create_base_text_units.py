@@ -326,26 +326,48 @@ def create_base_text_units(
 
 def create_attributes(metadata_str) -> dict:
     """Create a simple attributes dictionary from metadata string."""
+    log.info("Creating attributes from metadata string")
+    
     attributes = {}
     
     # Parse metadata if it's a string
     metadata = {}
     if isinstance(metadata_str, str) and metadata_str:
         try:
+            log.debug(f"Parsing JSON metadata string: {metadata_str[:100]}..." if len(metadata_str) > 100 else metadata_str)
             metadata = json.loads(metadata_str)
-        except:
+        except Exception as e:
+            log.warning(f"Failed to parse metadata JSON: {e}")
             return attributes
+    else:
+        log.debug(f"Metadata is not a string: {type(metadata_str)}")
+    
+    # Log the full metadata structure for debugging
+    try:
+        metadata_sample = str(metadata)[:500] + "..." if len(str(metadata)) > 500 else str(metadata)
+        log.debug(f"Raw metadata structure: {metadata_sample}")
+    except Exception as e:
+        log.warning(f"Failed to log metadata structure: {e}")
     
     # Create simplified structure with HTML info
     if isinstance(metadata, dict) and "html" in metadata:
         html = metadata.get("html", {})
         if isinstance(html, dict):
+            # Log HTML structure keys
+            log.debug(f"HTML metadata keys: {list(html.keys())}")
+            
             # Store basic HTML info - only primitive types
             html_props = {}
             for key, value in html.items():
                 # Skip non-serializable values and large arrays
-                if key not in ["pages", "paragraphs"] and isinstance(value, (str, int, float, bool)) or value is None:
+                if key not in ["pages", "paragraphs"] and (isinstance(value, (str, int, float, bool)) or value is None):
                     html_props[key] = value
+                    log.debug(f"Added HTML property {key}: {value}")
+                else:
+                    if key in ["pages", "paragraphs"]:
+                        log.debug(f"Skipping large array '{key}' with {len(value) if isinstance(value, list) else 'non-list'} elements")
+                    else:
+                        log.debug(f"Skipping non-primitive HTML property {key}: {type(value)}")
             
             attributes["html"] = html_props
     
@@ -353,6 +375,8 @@ def create_attributes(metadata_str) -> dict:
     # Make sure we only keep primitive types that Parquet can handle
     for key in ["page", "paragraph", "char_position"]:
         if key in metadata and metadata[key]:
+            log.debug(f"Processing {key} metadata: {metadata[key]}")
+            
             # Convert dictionaries to flattened structures
             if isinstance(metadata[key], dict):
                 flat_data = {}
@@ -360,6 +384,14 @@ def create_attributes(metadata_str) -> dict:
                     # Only keep primitive types
                     if isinstance(subvalue, (str, int, float, bool)) or subvalue is None:
                         flat_data[subkey] = subvalue
+                        log.debug(f"Added {key}.{subkey}: {subvalue}")
+                    else:
+                        log.debug(f"Skipping non-primitive {key}.{subkey}: {type(subvalue)}")
                 attributes[key] = flat_data
+            else:
+                log.debug(f"Skipping non-dict {key}: {type(metadata[key])}")
+    
+    # Log the final attributes structure
+    log.info(f"Final attributes created: {attributes}")
     
     return attributes

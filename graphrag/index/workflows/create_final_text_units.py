@@ -70,6 +70,70 @@ def create_final_text_units(
     final_covariates: pd.DataFrame | None,
 ) -> pd.DataFrame:
     """All the steps to transform the text units."""
+    log.info(f"Creating final text units from {len(text_units) if text_units is not None else 'None'} input rows")
+    
+    # Select basic columns from text_units
+    basic_columns = ["id", "text", "document_ids", "n_tokens"]
+    selected = text_units.loc[:, [col for col in basic_columns if col in text_units.columns]].copy()
+    log.info(f"Selected {len(selected)} rows with basic columns: {[c for c in basic_columns if c in text_units.columns]}")
+    
+    # Add human_readable_id
+    selected["human_readable_id"] = selected.index + 1
+    
+    # Check for HTML structure columns
+    html_columns = [
+        PAGE_ID, PAGE_NUMBER, PARAGRAPH_ID, PARAGRAPH_NUMBER,
+        CHAR_POSITION_START, CHAR_POSITION_END
+    ]
+    
+    # Log available HTML structure columns
+    present_html_columns = [col for col in html_columns if col in text_units.columns]
+    log.info(f"Available HTML structure columns: {present_html_columns}")
+    
+    # Add HTML structure columns if they exist in text_units
+    for col in html_columns:
+        if col in text_units.columns:
+            # Log a sample of the column values
+            sample_values = text_units[col].head(3).tolist()
+            log.debug(f"Column {col} sample values: {sample_values}")
+            
+            # Check for complex objects in the column
+            complex_objects = text_units[col].apply(lambda x: isinstance(x, (dict, list))).sum()
+            if complex_objects > 0:
+                log.warning(f"Found {complex_objects} complex objects in column {col}, converting to strings")
+            
+            # Ensure values are primitive types, not complex objects
+            selected[col] = text_units[col].apply(
+                lambda x: str(x) if isinstance(x, (dict, list)) else x
+            )
+        else:
+            selected[col] = None
+    
+    # Process attributes column if it exists
+    if "attributes" in text_units.columns:
+        log.info("Processing attributes column")
+        
+        # Log a sample of the attributes values
+        sample_attrs = text_units["attributes"].head(3).tolist()
+        log.debug(f"Attributes sample values: {sample_attrs}")
+        
+        # Parse and simplify attributes - ensure it's always a JSON string
+        selected["attributes"] = text_units["attributes"].apply(
+            lambda x: json.dumps(simplify_attributes(x))
+        )
+        
+        # Log the parsed results for verification
+        sample_parsed = selected["attributes"].head(3).tolist()
+        log.debug(f"Parsed and simplified attributes: {sample_parsed}")
+    else:
+        log.info("No attributes column found, creating empty attributes")
+        #def create_final_text_units(
+    text_units: pd.DataFrame,
+    final_entities: pd.DataFrame,
+    final_relationships: pd.DataFrame,
+    final_covariates: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """All the steps to transform the text units."""
     # Select basic columns from text_units
     basic_columns = ["id", "text", "document_ids", "n_tokens"]
     selected = text_units.loc[:, [col for col in basic_columns if col in text_units.columns]].copy()
@@ -177,19 +241,33 @@ def create_final_text_units(
 
 def simplify_attributes(attrs):
     """Simplify attributes to ensure proper serialization."""
+    log.info("Simplifying attributes for Parquet serialization")
+    
+    # Handle None values
     if attrs is None:
+        log.debug("Attributes is None, returning empty dict")
         return {}
     
-    # Parse if string
+    # Parse string attributes
     if isinstance(attrs, str):
         try:
+            log.debug(f"Parsing attributes JSON string: {attrs[:100]}..." if len(attrs) > 100 else attrs)
             attrs = json.loads(attrs)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            log.warning(f"Failed to parse attributes JSON: {e}")
             return {}
     
     # If not a dictionary, return empty dict
     if not isinstance(attrs, dict):
+        log.debug(f"Attributes is not a dict but {type(attrs)}, returning empty dict")
         return {}
+    
+    # Log original structure
+    try:
+        attrs_sample = str(attrs)[:500] + "..." if len(str(attrs)) > 500 else str(attrs)
+        log.debug(f"Original attributes structure: {attrs_sample}")
+    except Exception as e:
+        log.warning(f"Error logging attributes: {e}")
     
     # Create simplified version keeping HTML structure fields
     result = {}
@@ -197,26 +275,47 @@ def simplify_attributes(attrs):
     # Include only essential fields, removing large arrays and ensuring flat structure
     if "html" in attrs and isinstance(attrs["html"], dict):
         html = attrs["html"]
+        log.debug(f"Processing HTML attributes with keys: {list(html.keys())}")
+        
         # Create a flattened structure with only primitive types
-        result["html"] = {
-            key: value for key, value in html.items()
-            if key not in ["pages", "paragraphs"] and 
-               isinstance(value, (str, int, float, bool, type(None)))
-        }
+        html_result = {}
+        for key, value in html.items():
+            if key not in ["pages", "paragraphs"] and isinstance(value, (str, int, float, bool, type(None))):
+                html_result[key] = value
+                log.debug(f"Keeping HTML property {key}: {value}")
+            else:
+                if key in ["pages", "paragraphs"]:
+                    array_len = len(value) if isinstance(value, list) else "not a list"
+                    log.debug(f"Removing large array '{key}' with {array_len} elements")
+                else:
+                    log.debug(f"Removing non-primitive HTML property {key}: {type(value)}")
+        
+        result["html"] = html_result
     
     # Process page and paragraph data - flatten nested structures
     for key in ["page", "paragraph", "char_position"]:
         if key in attrs and attrs[key]:
+            log.debug(f"Processing {key} attribute: {attrs[key]}")
             if isinstance(attrs[key], dict):
                 # Extract only primitive values
-                result[key] = {
-                    k: v for k, v in attrs[key].items()
-                    if isinstance(v, (str, int, float, bool, type(None)))
-                }
+                key_result = {}
+                for k, v in attrs[key].items():
+                    if isinstance(v, (str, int, float, bool, type(None))):
+                        key_result[k] = v
+                        log.debug(f"Keeping {key}.{k}: {v}")
+                    else:
+                        log.debug(f"Removing non-primitive {key}.{k}: {type(v)}")
+                result[key] = key_result
             else:
                 # If it's already a primitive value, keep it
                 if isinstance(attrs[key], (str, int, float, bool)):
                     result[key] = attrs[key]
+                    log.debug(f"Keeping primitive {key}: {attrs[key]}")
+                else:
+                    log.debug(f"Removing non-primitive {key}: {type(attrs[key])}")
+    
+    # Log the final result
+    log.info(f"Simplified attributes: {result}")
     
     return result
 
