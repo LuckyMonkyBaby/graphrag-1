@@ -3,6 +3,7 @@
 
 """A module containing HTML document loader functionality."""
 
+import json
 import logging
 from pathlib import Path
 import re
@@ -67,9 +68,11 @@ async def load_html(
             raise
             
         # Parse HTML with BeautifulSoup
+        log.info(f"Parsing HTML content from {path}")
         soup = BeautifulSoup(html_content, 'html.parser')
         
         # Extract document structure
+        log.info(f"Extracting document structure from {path}")
         document_structure = extract_document_structure(soup, Path(path).name)
         
         # Create HTML metadata with basic information
@@ -77,11 +80,22 @@ async def load_html(
             "has_pages": bool(document_structure.get("pages")),
             "has_paragraphs": bool(document_structure.get("paragraphs")),
             "doc_type": document_structure.get("doc_type"),
-            "doc_sequence": document_structure.get("doc_sequence"),
+            "filename": document_structure.get("filename"),
             "page_count": len(document_structure.get("pages", [])),
             "paragraph_count": len(document_structure.get("paragraphs", [])),
             "encoding": encoding_to_use
         }
+        
+        # Add detailed logging for html_info
+        log.info(f"HTML metadata for {path}:")
+        log.info(f"  - Document type: {html_info['doc_type']}")
+        log.info(f"  - Filename: {html_info['filename']}")
+        log.info(f"  - Has pages: {html_info['has_pages']}")
+        log.info(f"  - Page count: {html_info['page_count']}")
+        log.info(f"  - Has paragraphs: {html_info['has_paragraphs']}")
+        log.info(f"  - Paragraph count: {html_info['paragraph_count']}")
+        log.info(f"  - Encoding: {html_info['encoding']}")
+        log.debug(f"Full HTML metadata: {json.dumps(html_info, indent=2)}")
         
         # Create a dataframe with the document information
         new_item = {**group, "text": document_structure["text"]}
@@ -90,15 +104,20 @@ async def load_html(
         if "metadata" in new_item and new_item["metadata"] is not None:
             if isinstance(new_item["metadata"], dict):
                 new_item["metadata"]["html"] = html_info
+                log.debug("Added HTML metadata to existing metadata dictionary")
             else:
                 new_item["metadata"] = {"original": new_item["metadata"], "html": html_info}
+                log.debug("Created new metadata structure with original and HTML metadata")
         else:
             new_item["metadata"] = {"html": html_info}
+            log.debug("Created new metadata with HTML info only")
         
         # Add basic fields
         new_item["id"] = gen_sha512_hash(new_item, new_item.keys())
         new_item["title"] = document_structure.get("title", str(Path(path).name))
         new_item["creation_date"] = await storage.get_creation_date(path)
+        
+        log.info(f"Created document entry with ID: {new_item['id']}, Title: {new_item['title']}")
         
         # Process data columns based on config
         df = pd.DataFrame([new_item])
@@ -109,6 +128,8 @@ async def load_html(
 
 def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, Any]:
     """Extract structured content from HTML document."""
+    log.info(f"Beginning document structure extraction for {filename}")
+    
     document_structure = {
         'text': '',             # Full text content
         'paragraphs': [],       # List of paragraph elements
@@ -120,15 +141,17 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
     title_tag = soup.find('title')
     if title_tag:
         document_structure['title'] = title_tag.get_text().strip()
+        log.info(f"Extracted document title: {document_structure['title']}")
+    else:
+        log.info("No title tag found in document")
     
     # Extract document metadata
     type_tag = soup.find('type')
     if type_tag:
-        document_structure['doc_type'] = type_tag.get_text().strip()
-    
-    sequence_tag = soup.find('sequence')
-    if sequence_tag:
-        document_structure['doc_sequence'] = sequence_tag.get_text().strip()
+        document_structure['doc_type'] = type_tag.get_text().strip().split('\n')[0]
+        log.info(f"Extracted document type: {document_structure['doc_type']}")
+    else:
+        log.info("No document type tag found")
     
     filename_tag = soup.find('filename')
     if filename_tag:
@@ -143,6 +166,7 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
         
         # Clean up and validate the filename
         filename_content = filename_content.strip()
+        log.debug(f"Raw filename content: {filename_content}")
         
         # Look for common filename patterns
         if re.match(r'^[a-zA-Z0-9_-]+\.(htm|html|txt)$', filename_content):
@@ -152,13 +176,26 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
             # and remove any problematic characters
             clean_filename = re.sub(r'[^\w\-\.]', '_', filename_content[:255])
             document_structure['filename'] = clean_filename if clean_filename else filename
+        
+        log.info(f"Extracted filename: {document_structure['filename']}")
+    else:
+        log.info(f"No filename tag found, using default: {filename}")
     
     # Look for page number patterns in the document
+    log.info("Identifying page markers in document")
     page_markers = identify_page_markers(soup)
     if page_markers:
         document_structure['pages'] = page_markers
+        log.info(f"Found {len(page_markers)} page markers")
+        for i, marker in enumerate(page_markers[:5]):  # Log first 5 page markers
+            log.debug(f"  - Page marker {i+1}: ID={marker.get('page_id')}, Num={marker.get('page_num')}")
+        if len(page_markers) > 5:
+            log.debug(f"  - ... and {len(page_markers) - 5} more")
+    else:
+        log.info("No page markers found in document")
     
     # Extract text content by recursively processing all elements
+    log.info("Extracting text content from document")
     char_pos = 0
     
     # Track element positions
@@ -209,11 +246,9 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
                         'char_end': char_pos,
                         'para_id': f"p{len(document_structure['paragraphs'])+1}",
                         'para_num': len(document_structure['paragraphs'])+1,
-                        'tag': element.name,
-                        'align': element.get('align'),
-                        'class': element.get('class'),
                     }
                     document_structure['paragraphs'].append(para_info)
+                    log.debug(f"Added paragraph {para_info['para_id']}: {element_text[:50]}..." if len(element_text) > 50 else element_text)
     
     # Process the document
     try:
@@ -224,13 +259,21 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
         # Fall back to a simpler approach
         document_structure['text'] = soup.get_text()
     
-    log.debug(f"Processed {len(document_structure['paragraphs'])} paragraphs")
+    log.info(f"Processed {len(document_structure['paragraphs'])} paragraphs")
+    for i, para in enumerate(document_structure['paragraphs'][:3]):  # Log first 3 paragraphs
+        log.debug(f"  - Paragraph {i+1}: ID={para.get('para_id')}, Length={len(para.get('text', ''))}")
+        log.debug(f"    Text preview: {para.get('text', '')[:50]}...")
+    if len(document_structure['paragraphs']) > 3:
+        log.debug(f"  - ... and {len(document_structure['paragraphs']) - 3} more paragraphs")
+    
+    log.info(f"Total document text length: {len(document_structure['text'])} characters")
     
     return document_structure
 
 
 def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     """Identify page markers in the document."""
+    log.info("Beginning page marker identification")
     page_markers = []
     
     # Regex patterns for different page number formats
@@ -254,8 +297,13 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
         r'^\s*[Pp]age\s+([A-Za-z]-\d+)\s*$'
     ]
     
+    log.debug(f"Using {len(page_patterns)} regex patterns to identify page markers")
+    
     # Pattern 1: Look for centered paragraphs with page numbers
-    for p in soup.find_all('p', align='center'):
+    centered_paragraphs = soup.find_all('p', align='center')
+    log.debug(f"Found {len(centered_paragraphs)} centered paragraphs to check for page numbers")
+    
+    for p in centered_paragraphs:
         text = p.get_text().strip()
         
         # Try each pattern
@@ -284,13 +332,15 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                     'tag': 'p',
                     'align': 'center',
                 })
+                log.debug(f"Found centered page marker: ID={page_id}, Num={page_num}, Text='{text}'")
                 break
     
     # Pattern 2: Look for non-centered paragraphs with "Page" indicators
-    for p in soup.find_all('p'):
-        if p.get('align') == 'center':
-            continue  # Skip centered ones, already processed
-            
+    all_paragraphs = soup.find_all('p')
+    non_centered_paragraphs = [p for p in all_paragraphs if p.get('align') != 'center']
+    log.debug(f"Found {len(non_centered_paragraphs)} non-centered paragraphs to check for page indicators")
+    
+    for p in non_centered_paragraphs:
         text = p.get_text().strip()
         if re.search(r'[Pp]age\s+', text):
             for pattern in [r'[Pp]age\s+(\d+)', r'[Pp]age\s+([ivxlcdmIVXLCDM]+)', r'[Pp]age\s+([A-Za-z]-\d+)']:
@@ -313,6 +363,8 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                         'tag': 'p',
                         'align': p.get('align'),
                     })
+                    log.debug(f"Found page indicator in text: ID={page_id}, Num={page_num}, Text='{text}'")
                     break
     
+    log.info(f"Identified {len(page_markers)} page markers in total")
     return page_markers

@@ -121,26 +121,68 @@ def create_final_text_units(
             if isinstance(attrs, str):
                 try:
                     attrs = json.loads(attrs)
-                except:
+                    log.debug(f"Successfully parsed attributes for row {idx}")
+                except Exception as e:
+                    log.warning(f"Failed to parse attributes for row {idx}: {e}")
                     continue
             
             if not isinstance(attrs, dict):
+                log.warning(f"Attributes for row {idx} is not a dictionary: {type(attrs)}")
                 continue
+            
+            # If attributes are empty or missing key fields, try to extract them using original dataset
+            if not attrs or all(attrs.get(key) is None for key in ["page", "paragraph", "char_position"]):
+                # Try to extract HTML attributes from original dataset if available
+                if original_dataset is not None and "document_ids" in row and row["document_ids"]:
+                    doc_id = row["document_ids"][0] if isinstance(row["document_ids"], list) and row["document_ids"] else None
+                    
+                    if doc_id and "id" in original_dataset.columns:
+                        matching_doc = original_dataset[original_dataset["id"] == doc_id]
+                        if not matching_doc.empty:
+                            # Create a combined row with both text_units and original dataset info
+                            combined_row = row.copy()
+                            for col in matching_doc.columns:
+                                if col not in combined_row:
+                                    combined_row[col] = matching_doc.iloc[0][col]
+                            
+                            # Try to extract HTML attributes
+                            log.debug(f"Trying to extract HTML attributes from original dataset for row {idx}")
+                            # Here we would call extract_html_attributes, but we'll use the attributes as is
                 
-            # Extract page info
+            # Extract page info with better error handling
             if "page" in attrs and attrs["page"] and isinstance(attrs["page"], dict):
-                selected.at[idx, PAGE_ID] = attrs["page"].get("id")
-                selected.at[idx, PAGE_NUMBER] = attrs["page"].get("number")
+                try:
+                    selected.at[idx, PAGE_ID] = attrs["page"].get("id")
+                    selected.at[idx, PAGE_NUMBER] = attrs["page"].get("number")
+                    log.debug(f"Row {idx}: Extracted page {attrs['page'].get('id')}, number {attrs['page'].get('number')}")
+                except Exception as e:
+                    log.warning(f"Error extracting page info for row {idx}: {e}")
             
-            # Extract paragraph info
+            # Extract paragraph info with better error handling
             if "paragraph" in attrs and attrs["paragraph"] and isinstance(attrs["paragraph"], dict):
-                selected.at[idx, PARAGRAPH_ID] = attrs["paragraph"].get("id")
-                selected.at[idx, PARAGRAPH_NUMBER] = attrs["paragraph"].get("number")
+                try:
+                    selected.at[idx, PARAGRAPH_ID] = attrs["paragraph"].get("id")
+                    selected.at[idx, PARAGRAPH_NUMBER] = attrs["paragraph"].get("number")
+                    log.debug(f"Row {idx}: Extracted paragraph {attrs['paragraph'].get('id')}, number {attrs['paragraph'].get('number')}")
+                except Exception as e:
+                    log.warning(f"Error extracting paragraph info for row {idx}: {e}")
             
-            # Extract character position info
+            # Extract character position info with better error handling
             if "char_position" in attrs and attrs["char_position"] and isinstance(attrs["char_position"], dict):
-                selected.at[idx, CHAR_POSITION_START] = attrs["char_position"].get("start")
-                selected.at[idx, CHAR_POSITION_END] = attrs["char_position"].get("end")
+                try:
+                    selected.at[idx, CHAR_POSITION_START] = attrs["char_position"].get("start")
+                    selected.at[idx, CHAR_POSITION_END] = attrs["char_position"].get("end")
+                    log.debug(f"Row {idx}: Extracted char positions {attrs['char_position'].get('start')} to {attrs['char_position'].get('end')}")
+                except Exception as e:
+                    log.warning(f"Error extracting char position for row {idx}: {e}")
+        
+        # Log attribute extraction statistics
+        attribute_counts = {
+            'page_ids': selected[PAGE_ID].notna().sum(),
+            'paragraph_ids': selected[PARAGRAPH_ID].notna().sum(),
+            'char_positions': selected[CHAR_POSITION_START].notna().sum()
+        }
+        log.info(f"HTML attribute extraction results: {attribute_counts}")
         
         # Keep simplified attributes in the metadata
         selected["attributes"] = text_units["attributes"].apply(
@@ -235,6 +277,12 @@ def simplify_attributes(attributes):
             # Only include simple fields
             if isinstance(value, (str, int, float, bool)) or value is None:
                 result["html"][key] = value
+            else:
+                # For complex objects, convert to string and limit length
+                try:
+                    result["html"][key] = str(value)[:500]  # Limit length
+                except:
+                    pass
     
     return result if result else None
 
