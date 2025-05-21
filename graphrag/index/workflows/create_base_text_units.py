@@ -360,8 +360,8 @@ def create_base_text_units(
     
     # Make sure column names are correct and data is properly aligned
     if len(chunk_df.columns) >= 3:
-        chunk_df.columns = ["document_ids", "text", "n_tokens"]
-        for col in ["document_ids", "text", "n_tokens"]:
+        chunk_df.columns = ["document_ids", "text", "n_tokens", "metadata"]
+        for col in ["document_ids", "text", "n_tokens", "metadata"]:
             aggregated[col] = chunk_df[col]
         log.info(f"Extracted expected columns from chunks: {list(chunk_df.columns)}")
     else:
