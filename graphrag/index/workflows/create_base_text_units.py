@@ -303,7 +303,7 @@ def create_base_text_units(
                         (chunk[0], metadata_str + chunk[1], chunk[2]) if chunk else None
                     )
 
-        # Add the original document's metadata to each chunk for later reference
+        # Add only essential metadata to each chunk for later reference
         # This is different from prepending - we're attaching it as structured data
         document_metadata = row.get("metadata", {})
         if isinstance(document_metadata, str):
@@ -312,12 +312,37 @@ def create_base_text_units(
             except:
                 document_metadata = {"raw": document_metadata}
         
+        # Create a lightweight version of the metadata that excludes large arrays
+        essential_metadata = {}
+        
+        # Copy essential document information
+        if isinstance(document_metadata, dict):
+            # Copy document-level metadata excluding large arrays
+            for key, value in document_metadata.items():
+                if key != "html":
+                    essential_metadata[key] = value
+            
+            # Only include essential HTML properties, not all pages and paragraphs
+            if "html" in document_metadata and isinstance(document_metadata["html"], dict):
+                html_meta = document_metadata["html"]
+                essential_metadata["html"] = {
+                    # Include only scalar properties
+                    "has_pages": html_meta.get("has_pages", False),
+                    "has_paragraphs": html_meta.get("has_paragraphs", False),
+                    "doc_type": html_meta.get("doc_type"),
+                    "filename": html_meta.get("filename"),
+                    "page_count": html_meta.get("page_count", 0),
+                    "paragraph_count": html_meta.get("paragraph_count", 0),
+                    "encoding": html_meta.get("encoding")
+                    # Deliberately exclude pages and paragraphs arrays
+                }
+        
         for index, chunk in enumerate(chunked):
             if chunk:
-                # Add metadata reference to each chunk
-                chunked[index] = (*chunk, document_metadata)
+                # Add lightweight metadata reference to each chunk
+                chunked[index] = (*chunk, essential_metadata)
         
-        log.debug("Added document metadata reference to each chunk")
+        log.debug("Added essential metadata reference to each chunk")
         row["chunks"] = chunked
         return row
 
@@ -445,11 +470,11 @@ def create_base_text_units(
 
 
 def extract_html_attributes(row: pd.Series) -> Dict[str, Any]:
-    """Extract HTML attributes from metadata.html only."""
+    """Extract HTML attributes from metadata.html only, preserving only essential data."""
     chunk_id = row.get("id", "unknown")
     log.debug(f"Extracting HTML attributes for chunk {chunk_id}")
     
-    # Default structure
+    # Default structure with only necessary fields
     attributes = {
         "page": None,
         "paragraph": None,
@@ -459,7 +484,7 @@ def extract_html_attributes(row: pd.Series) -> Dict[str, Any]:
         }
     }
     
-    # Get text content and position for matching
+    # Get text content for matching
     chunk_text = row.get("text", "")
     if not chunk_text:
         log.debug(f"No text content found for chunk {chunk_id}")

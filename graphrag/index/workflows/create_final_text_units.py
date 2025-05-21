@@ -253,7 +253,7 @@ def create_final_text_units(
 
 
 def simplify_attributes(attributes):
-    """Extract only essential data from attributes with full HTML structure preservation."""
+    """Extract only essential data from attributes with minimal HTML structure preservation."""
     if attributes is None:
         return None
     
@@ -268,7 +268,7 @@ def simplify_attributes(attributes):
     if not isinstance(attributes, dict):
         return None
     
-    # Create a structure that preserves HTML fields
+    # Create a minimal structure that preserves only essential HTML fields
     result = {}
     
     # Preserve page information
@@ -306,19 +306,14 @@ def simplify_attributes(attributes):
                     except (ValueError, TypeError):
                         pass
     
-    # Also include any additional HTML metadata for backward compatibility
+    # Include only minimal HTML metadata (no pages or paragraphs arrays)
     if "html" in attributes and isinstance(attributes["html"], dict):
-        result["html"] = {}
-        for key, value in attributes["html"].items():
-            # Only include simple fields
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                result["html"][key] = value
-            else:
-                # For complex objects, convert to string and limit length
-                try:
-                    result["html"][key] = str(value)[:500]  # Limit length
-                except:
-                    pass
+        html_meta = attributes["html"]
+        result["html"] = {
+            key: value for key, value in html_meta.items()
+            if key not in ["pages", "paragraphs"] and 
+            isinstance(value, (str, int, float, bool)) or value is None
+        }
     
     return result if result else None
 
