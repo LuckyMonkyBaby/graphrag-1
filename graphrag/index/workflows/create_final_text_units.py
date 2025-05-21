@@ -86,7 +86,10 @@ def create_final_text_units(
     # Add HTML structure columns if they exist in text_units
     for col in html_columns:
         if col in text_units.columns:
-            selected[col] = text_units[col]
+            # Ensure values are primitive types, not complex objects
+            selected[col] = text_units[col].apply(
+                lambda x: str(x) if isinstance(x, (dict, list)) else x
+            )
         else:
             selected[col] = None
     
@@ -116,17 +119,17 @@ def create_final_text_units(
         if "covariate_ids" not in final_joined.columns:
             final_joined["covariate_ids"] = [[] for _ in range(len(final_joined))]
 
+    # Ensure list columns are consistently lists before groupby
+    for col in final_joined.columns:
+        if col.endswith('_ids'):
+            # Ensure list columns are consistently lists
+            final_joined[col] = final_joined[col].apply(
+                lambda x: [] if x is None else 
+                          (x if isinstance(x, list) else [x])
+            )
+    
     # Group and aggregate results
     try:
-        # Ensure consistent types before groupby
-        for col in final_joined.columns:
-            if col.endswith('_ids'):
-                # Ensure list columns are consistently lists
-                final_joined[col] = final_joined[col].apply(
-                    lambda x: [] if x is None else 
-                              (x if isinstance(x, list) else [x])
-                )
-        
         # Group by id and take first value (after ensuring consistent types)
         aggregated = final_joined.groupby("id", sort=False).agg("first").reset_index()
     except Exception as e:
@@ -141,30 +144,41 @@ def create_final_text_units(
             else:
                 aggregated[col] = None
     
-    # Ensure all lists are properly formatted - double check for Parquet compatibility
+    # Ensure all lists are properly formatted for Parquet compatibility
     for col in ["document_ids", "entity_ids", "relationship_ids", "covariate_ids"]:
         if col in aggregated.columns:
+            # Make sure each value is a list, never None or a primitive
             aggregated[col] = aggregated[col].apply(
                 lambda x: [] if x is None else (x if isinstance(x, list) else [x])
             )
     
+    # Handle complex types in the 'children' column if it exists
+    # This appears to be causing one of the errors
+    if 'children' in aggregated.columns:
+        # Convert any complex objects to strings or remove them
+        aggregated['children'] = aggregated['children'].apply(
+            lambda x: [] if x is None else 
+                     (x if isinstance(x, list) else [str(x)])
+        )
+    
     # Final check for any complex data types in non-list columns
     for col in aggregated.columns:
-        if col not in ["document_ids", "entity_ids", "relationship_ids", "covariate_ids"] and col != "attributes":
+        if col not in ["document_ids", "entity_ids", "relationship_ids", "covariate_ids", "children"] and col != "attributes":
             # Ensure non-list columns don't contain complex objects
             if aggregated[col].apply(lambda x: isinstance(x, (dict, list))).any():
-                # Convert any dict/list to strings to ensure Parquet compatibility
+                # Convert any dict/list to strings
                 aggregated[col] = aggregated[col].apply(
                     lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x
                 )
 
+    # Return only the specified columns to avoid any extra problematic columns
     return aggregated.loc[:, TEXT_UNITS_FINAL_COLUMNS]
 
 
 def simplify_attributes(attrs):
     """Simplify attributes to ensure proper serialization."""
     if attrs is None:
-        return None
+        return {}
     
     # Parse if string
     if isinstance(attrs, str):
@@ -180,18 +194,29 @@ def simplify_attributes(attrs):
     # Create simplified version keeping HTML structure fields
     result = {}
     
-    # Include only essential fields, removing large arrays
+    # Include only essential fields, removing large arrays and ensuring flat structure
     if "html" in attrs and isinstance(attrs["html"], dict):
         html = attrs["html"]
+        # Create a flattened structure with only primitive types
         result["html"] = {
             key: value for key, value in html.items()
-            if key not in ["pages", "paragraphs"] and isinstance(value, (str, int, float, bool, type(None)))
+            if key not in ["pages", "paragraphs"] and 
+               isinstance(value, (str, int, float, bool, type(None)))
         }
     
-    # Include page, paragraph, and char_position if present
+    # Process page and paragraph data - flatten nested structures
     for key in ["page", "paragraph", "char_position"]:
         if key in attrs and attrs[key]:
-            result[key] = attrs[key]
+            if isinstance(attrs[key], dict):
+                # Extract only primitive values
+                result[key] = {
+                    k: v for k, v in attrs[key].items()
+                    if isinstance(v, (str, int, float, bool, type(None)))
+                }
+            else:
+                # If it's already a primitive value, keep it
+                if isinstance(attrs[key], (str, int, float, bool)):
+                    result[key] = attrs[key]
     
     return result
 

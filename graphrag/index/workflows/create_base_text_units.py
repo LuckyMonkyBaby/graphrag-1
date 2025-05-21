@@ -340,18 +340,26 @@ def create_attributes(metadata_str) -> dict:
     if isinstance(metadata, dict) and "html" in metadata:
         html = metadata.get("html", {})
         if isinstance(html, dict):
-            # Store basic HTML info
-            attributes["html"] = {
-                "doc_type": html.get("doc_type"),
-                "has_pages": html.get("has_pages", False),
-                "page_count": html.get("page_count", 0),
-                "paragraph_count": html.get("paragraph_count", 0)
-            }
+            # Store basic HTML info - only primitive types
+            html_props = {}
+            for key, value in html.items():
+                # Skip non-serializable values and large arrays
+                if key not in ["pages", "paragraphs"] and isinstance(value, (str, int, float, bool)) or value is None:
+                    html_props[key] = value
+            
+            attributes["html"] = html_props
     
     # Include page, paragraph, and char_position if present
+    # Make sure we only keep primitive types that Parquet can handle
     for key in ["page", "paragraph", "char_position"]:
-        if key in attributes and attributes[key]:
-            result[key] = attributes[key]
+        if key in metadata and metadata[key]:
+            # Convert dictionaries to flattened structures
+            if isinstance(metadata[key], dict):
+                flat_data = {}
+                for subkey, subvalue in metadata[key].items():
+                    # Only keep primitive types
+                    if isinstance(subvalue, (str, int, float, bool)) or subvalue is None:
+                        flat_data[subkey] = subvalue
+                attributes[key] = flat_data
     
     return attributes
-
