@@ -1,8 +1,3 @@
-# Copyright (c) 2024 Microsoft Corporation.
-# Licensed under the MIT License
-
-"""A module containing run_workflow method definition."""
-
 import json
 import logging
 from typing import Any, cast
@@ -19,9 +14,6 @@ from graphrag.index.typing.workflow import WorkflowFunctionOutput
 from graphrag.index.utils.hashing import gen_sha512_hash
 from graphrag.logger.progress import Progress
 from graphrag.utils.storage import load_table_from_storage, write_table_to_storage
-
-# Add logger
-log = logging.getLogger(__name__)
 
 
 async def run_workflow(
@@ -226,7 +218,7 @@ def create_base_text_units(
         row["chunks"] = chunked
         return row
     
-    # Apply chunker
+            # Apply chunker
     log.info("Chunking documents")
     aggregated = aggregated.apply(lambda row: chunker(row), axis=1)
     
@@ -262,7 +254,11 @@ def create_base_text_units(
         if len(chunks_df.columns) >= 4:
             # Has metadata column
             chunks_df.columns = ["document_ids", "text", "n_tokens", "metadata"]
-            aggregated["metadata"] = chunks_df["metadata"]
+            # Convert metadata to string to avoid mixed type issues
+            chunk_metadata = chunks_df["metadata"].apply(
+                lambda x: json.dumps(x) if isinstance(x, dict) else None
+            )
+            aggregated["chunk_metadata"] = chunk_metadata
         else:
             # Standard columns
             chunks_df.columns = ["document_ids", "text", "n_tokens"]
@@ -281,8 +277,14 @@ def create_base_text_units(
         # Rename for downstream consumption
         aggregated.rename(columns={"chunk": "text"}, inplace=True)
     
+    # Ensure document_ids is always a list to prevent mixed type errors
+    log.info("Normalizing document_ids format")
+    aggregated["document_ids"] = aggregated["document_ids"].apply(
+        lambda x: [] if x is None else (x if isinstance(x, list) else [x])
+    )
+    
     # Add HTML structure columns if metadata contains HTML
-    if "metadata" in aggregated.columns and has_html_in_metadata:
+    if "chunk_metadata" in aggregated.columns and has_html_in_metadata:
         # Add structure columns with default None values
         aggregated["page_id"] = None
         aggregated["page_number"] = None
@@ -294,11 +296,18 @@ def create_base_text_units(
         # Create attributes from structured info
         log.info("Creating attributes column")
         aggregated["attributes"] = aggregated.apply(
-            lambda row: create_attributes(row), axis=1
+            lambda row: create_attributes(row.get("chunk_metadata", None)), axis=1
         )
+        
+        # Convert attributes to JSON strings to prevent Parquet issues
+        aggregated["attributes"] = aggregated["attributes"].apply(json.dumps)
+        
+        # Remove temporary column
+        if "chunk_metadata" in aggregated.columns:
+            aggregated = aggregated.drop(columns=["chunk_metadata"])
     else:
-        # Create empty attributes column
-        aggregated["attributes"] = [{}] * len(aggregated)
+        # Create empty attributes column as JSON strings
+        aggregated["attributes"] = ["{}"] * len(aggregated)
     
     # Filter out rows with no text and reset index
     log.info("Finalizing results")
@@ -309,15 +318,15 @@ def create_base_text_units(
     return result
 
 
-def create_attributes(row: pd.Series) -> dict:
-    """Create a simple attributes dictionary for a row."""
+def create_attributes(metadata_str) -> dict:
+    """Create a simple attributes dictionary from metadata string."""
     attributes = {}
     
-    # Extract page info from metadata if available
-    metadata = row.get("metadata", {})
-    if isinstance(metadata, str):
+    # Parse metadata if it's a string
+    metadata = {}
+    if isinstance(metadata_str, str) and metadata_str:
         try:
-            metadata = json.loads(metadata)
+            metadata = json.loads(metadata_str)
         except:
             metadata = {}
     
