@@ -83,7 +83,10 @@ async def load_html(
             "filename": document_structure.get("filename"),
             "page_count": len(document_structure.get("pages", [])),
             "paragraph_count": len(document_structure.get("paragraphs", [])),
-            "encoding": encoding_to_use
+            "encoding": encoding_to_use,
+            # Add direct references to pages and paragraphs for easy access
+            "pages": document_structure.get("pages", []),
+            "paragraphs": document_structure.get("paragraphs", [])
         }
         
         # Add detailed logging for html_info
@@ -95,38 +98,26 @@ async def load_html(
         log.info(f"  - Has paragraphs: {html_info['has_paragraphs']}")
         log.info(f"  - Paragraph count: {html_info['paragraph_count']}")
         log.info(f"  - Encoding: {html_info['encoding']}")
-        log.debug(f"Full HTML metadata: {json.dumps(html_info, indent=2)}")
+        log.debug(f"Extracted {len(html_info['pages'])} page markers and {len(html_info['paragraphs'])} paragraphs")
         
         # Create a dataframe with the document information
         new_item = {**group, "text": document_structure["text"]}
         
-        # Add metadata from both document and HTML
-        if "metadata" in new_item and new_item["metadata"] is not None:
-            if isinstance(new_item["metadata"], dict):
-                new_item["metadata"]["html"] = html_info
-                log.debug("Added HTML metadata to existing metadata dictionary")
-            else:
-                new_item["metadata"] = {"original": new_item["metadata"], "html": html_info}
-                log.debug("Created new metadata structure with original and HTML metadata")
-        else:
-            new_item["metadata"] = {"html": html_info}
-            log.debug("Created new metadata with HTML info only")
+        # Store the complete document structure directly in metadata
+        # Don't create a separate html_attributes column
+        new_item["metadata"] = {
+            "html": html_info,
+            # If there was existing metadata, merge it
+            **(new_item.get("metadata", {})) if isinstance(new_item.get("metadata"), dict) else 
+            {"original": new_item.get("metadata")} if new_item.get("metadata") is not None else {}
+        }
+        
+        log.info(f"Stored complete HTML structure in metadata")
         
         # Add basic fields
         new_item["id"] = gen_sha512_hash(new_item, new_item.keys())
         new_item["title"] = document_structure.get("title", str(Path(path).name))
         new_item["creation_date"] = await storage.get_creation_date(path)
-        
-        # Add HTML attributes directly as a column for extraction in create_base_text_units
-        log.info("Adding HTML attributes as a dedicated column")
-        html_attributes = {
-            "pages": document_structure.get("pages", []),
-            "paragraphs": document_structure.get("paragraphs", [])
-        }
-        new_item["html_attributes"] = html_attributes
-        
-        # Log the HTML attributes structure
-        log.info(f"HTML attributes added with {len(html_attributes['pages'])} pages and {len(html_attributes['paragraphs'])} paragraphs")
         
         log.info(f"Created document entry with ID: {new_item['id']}, Title: {new_item['title']}")
         

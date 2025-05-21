@@ -98,15 +98,44 @@ async def run_workflow(
         
         return df
     
+    # Make sure metadata is serialized consistently by converting to string
+    if 'metadata' in output.columns:
+        log.info("Converting metadata column to JSON strings")
+        output['metadata'] = output['metadata'].apply(
+            lambda x: json.dumps(x) if isinstance(x, dict) else (x if isinstance(x, str) else None)
+        )
+    
+    # Make sure attributes are serialized
+    if 'attributes' in output.columns:
+        log.info("Converting attributes column to JSON strings") 
+        output['attributes'] = output['attributes'].apply(
+            lambda x: json.dumps(x) if isinstance(x, dict) else (x if isinstance(x, str) else None)
+        )
+    
     # Apply normalization to both dataframes
     documents_copy = normalize_column_types(documents_copy)
     output = normalize_column_types(output)
     
-    # Remove the 'chunk' column from output if it exists
-    # This column is likely causing the error
+    # Remove any problematic columns
     if 'chunk' in output.columns:
         log.info("Removing 'chunk' column with mixed types to prevent Parquet errors")
         output = output.drop(columns=['chunk'])
+    
+    # Clean up any columns with JSON parsing issues
+    for col in output.columns:
+        if output[col].dtype == 'object':
+            try:
+                # Test serialize a sample to check for issues
+                if len(output) > 0:
+                    test_val = output[col].iloc[0]
+                    if isinstance(test_val, (dict, list)):
+                        json.dumps(test_val)  # This will raise an error if not serializable
+            except Exception as e:
+                log.warning(f"Column '{col}' has serialization issues: {e}")
+                log.info(f"Converting entire '{col}' column to strings to ensure serialization")
+                output[col] = output[col].apply(
+                    lambda x: str(x) if x is not None else None
+                )
     
     log.info("Writing processed data to storage")
     try:
@@ -118,7 +147,28 @@ async def run_workflow(
         log.error(f"Column types in documents_copy: {documents_copy.dtypes}")
         for col in documents_copy.columns:
             if documents_copy[col].dtype == 'object':
-                sample_types = documents_copy[col].apply(type).unique()
+                try:
+                    sample_types = documents_copy[col].apply(type).unique()
+                    log.error(f"Column '{col}' contains types: {sample_types}")
+                except:
+                    log.error(f"Column '{col}' has complex types that couldn't be analyzed")
+    
+    try:
+        await write_table_to_storage(output, "text_units", context.storage)
+        log.info("Successfully wrote text_units to storage")
+    except Exception as e:
+        log.error(f"Error writing text_units to storage: {e}")
+        # Try to provide more detailed error information
+        log.error(f"Column types in output: {output.dtypes}")
+        for col in output.columns:
+            if output[col].dtype == 'object':
+                try:
+                    sample_types = output[col].apply(type).unique()
+                    log.error(f"Column '{col}' contains types: {sample_types}")
+                except:
+                    log.error(f"Column '{col}' has complex types that couldn't be analyzed")
+    
+    log.info("Workflow execution completed")col].apply(type).unique()
                 log.error(f"Column '{col}' contains types: {sample_types}")
     
     try:
@@ -193,7 +243,8 @@ def create_base_text_units(
         line_delimiter = ".\n"
         metadata_str = ""
         metadata_tokens = 0
-
+        
+        # Extract metadata for prepending if needed
         if prepend_metadata and "metadata" in row:
             metadata = row["metadata"]
             log.debug(f"Processing metadata of type: {type(metadata)}")
@@ -209,8 +260,20 @@ def create_base_text_units(
                     
             if isinstance(metadata, dict):
                 log.debug(f"Metadata keys: {list(metadata.keys())}")
+                
+                # Remove pages and paragraphs from the prepended metadata to save space
+                metadata_for_prepend = metadata.copy()
+                if "html" in metadata_for_prepend:
+                    html_metadata = metadata_for_prepend["html"].copy() if isinstance(metadata_for_prepend["html"], dict) else {}
+                    # Remove large arrays that don't need to be prepended
+                    if "pages" in html_metadata:
+                        html_metadata.pop("pages")
+                    if "paragraphs" in html_metadata:
+                        html_metadata.pop("paragraphs")
+                    metadata_for_prepend["html"] = html_metadata
+                
                 metadata_str = (
-                    line_delimiter.join(f"{k}: {v}" for k, v in metadata.items())
+                    line_delimiter.join(f"{k}: {v}" for k, v in metadata_for_prepend.items())
                     + line_delimiter
                 )
                 log.debug(f"Prepared metadata string of length {len(metadata_str)}")
@@ -246,6 +309,21 @@ def create_base_text_units(
                         (chunk[0], metadata_str + chunk[1], chunk[2]) if chunk else None
                     )
 
+        # Add the original document's metadata to each chunk for later reference
+        # This is different from prepending - we're attaching it as structured data
+        document_metadata = row.get("metadata", {})
+        if isinstance(document_metadata, str):
+            try:
+                document_metadata = json.loads(document_metadata)
+            except:
+                document_metadata = {"raw": document_metadata}
+        
+        for index, chunk in enumerate(chunked):
+            if chunk:
+                # Add metadata reference to each chunk
+                chunked[index] = (*chunk, document_metadata)
+        
+        log.debug("Added document metadata reference to each chunk")
         row["chunks"] = chunked
         return row
 
