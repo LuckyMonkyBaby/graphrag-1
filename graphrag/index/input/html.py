@@ -105,11 +105,17 @@ async def load_html(
         
         # Store the complete document structure directly in metadata
         # Don't create a separate html_attributes column
+        if isinstance(new_item.get("metadata"), dict):
+            existing_metadata = new_item.get("metadata", {})
+        elif new_item.get("metadata") is not None:
+            existing_metadata = {"original": new_item.get("metadata")}
+        else:
+            existing_metadata = {}
+
+        # Then construct the full metadata dictionary
         new_item["metadata"] = {
             "html": html_info,
-            # If there was existing metadata, merge it
-            **(new_item.get("metadata", {})) if isinstance(new_item.get("metadata"), dict) else 
-            {"original": new_item.get("metadata")} if new_item.get("metadata") is not None else {}
+            **existing_metadata
         }
         
         log.info(f"Stored complete HTML structure in metadata")
