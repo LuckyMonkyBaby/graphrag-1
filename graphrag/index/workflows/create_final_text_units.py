@@ -67,71 +67,7 @@ def create_final_text_units(
     text_units: pd.DataFrame,
     final_entities: pd.DataFrame,
     final_relationships: pd.DataFrame,
-    final_covariates: pd.DataFrame | None,
-) -> pd.DataFrame:
-    """All the steps to transform the text units."""
-    log.info(f"Creating final text units from {len(text_units) if text_units is not None else 'None'} input rows")
-    
-    # Select basic columns from text_units
-    basic_columns = ["id", "text", "document_ids", "n_tokens"]
-    selected = text_units.loc[:, [col for col in basic_columns if col in text_units.columns]].copy()
-    log.info(f"Selected {len(selected)} rows with basic columns: {[c for c in basic_columns if c in text_units.columns]}")
-    
-    # Add human_readable_id
-    selected["human_readable_id"] = selected.index + 1
-    
-    # Check for HTML structure columns
-    html_columns = [
-        PAGE_ID, PAGE_NUMBER, PARAGRAPH_ID, PARAGRAPH_NUMBER,
-        CHAR_POSITION_START, CHAR_POSITION_END
-    ]
-    
-    # Log available HTML structure columns
-    present_html_columns = [col for col in html_columns if col in text_units.columns]
-    log.info(f"Available HTML structure columns: {present_html_columns}")
-    
-    # Add HTML structure columns if they exist in text_units
-    for col in html_columns:
-        if col in text_units.columns:
-            # Log a sample of the column values
-            sample_values = text_units[col].head(3).tolist()
-            log.debug(f"Column {col} sample values: {sample_values}")
-            
-            # Check for complex objects in the column
-            complex_objects = text_units[col].apply(lambda x: isinstance(x, (dict, list))).sum()
-            if complex_objects > 0:
-                log.warning(f"Found {complex_objects} complex objects in column {col}, converting to strings")
-            
-            # Ensure values are primitive types, not complex objects
-            selected[col] = text_units[col].apply(
-                lambda x: str(x) if isinstance(x, (dict, list)) else x
-            )
-        else:
-            selected[col] = None
-    
-    # Process attributes column if it exists
-    if "attributes" in text_units.columns:
-        log.info("Processing attributes column")
-        
-        # Log a sample of the attributes values
-        sample_attrs = text_units["attributes"].head(3).tolist()
-        log.debug(f"Attributes sample values: {sample_attrs}")
-        
-        # Parse and simplify attributes - ensure it's always a JSON string
-        selected["attributes"] = text_units["attributes"].apply(
-            lambda x: json.dumps(simplify_attributes(x))
-        )
-        
-        # Log the parsed results for verification
-        sample_parsed = selected["attributes"].head(3).tolist()
-        log.debug(f"Parsed and simplified attributes: {sample_parsed}")
-    else:
-        log.info("No attributes column found, creating empty attributes")
-        #def create_final_text_units(
-    text_units: pd.DataFrame,
-    final_entities: pd.DataFrame,
-    final_relationships: pd.DataFrame,
-    final_covariates: pd.DataFrame | None,
+    final_covariates: Optional[pd.DataFrame] = None
 ) -> pd.DataFrame:
     """All the steps to transform the text units."""
     log.info(f"Creating final text units from {len(text_units) if text_units is not None else 'None'} input rows")
