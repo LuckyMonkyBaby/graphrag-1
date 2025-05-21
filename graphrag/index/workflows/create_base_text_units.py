@@ -80,23 +80,119 @@ def create_base_text_units(
     callbacks.progress(Progress(percent=0))
     
     # Check for HTML structure in metadata
-    has_html_in_metadata = False
-    if "metadata" in documents.columns:
-        try:
-            has_html_in_metadata = documents["metadata"].apply(
-                lambda m: isinstance(m, dict) and "html" in m 
-                or (isinstance(m, str) and "html" in m)
-            ).any()
+    has_html_in_metadata = True
+    if "metadata" in documents.columns and has_html_in_metadata:
+        # Create lookup of document metadata by ID
+        doc_meta_lookup = {}
+        for _, row in documents.iterrows():
+            if row.get("id") is not None:
+                doc_id = row.get("id")
+                metadata = row.get("metadata")
+                if isinstance(metadata, dict) and "html" in metadata:
+                    doc_meta_lookup[doc_id] = metadata
+        
+        log.info(f"Created lookup for {len(doc_meta_lookup)} documents with HTML metadata")
+        
+        # Function to match chunk to paragraphs and extract position info
+        def extract_html_structure(row):
+            # Initialize default values
+            page_id = None
+            page_number = None
+            paragraph_id = None
+            paragraph_number = None
+            char_start = None
+            char_end = None
             
-            if has_html_in_metadata:
-                log.info("Detected HTML structure in document metadata")
-        except Exception as e:
-            log.warning(f"Error checking for HTML in metadata: {e}")
-
-    # Prepare aggregation dictionary
-    agg_dict = {"text_with_ids": list}
-    if "metadata" in documents:
-        agg_dict["metadata"] = "first"  # type: ignore
+            # Get document IDs for this chunk
+            doc_ids = row.get("document_ids", [])
+            if not doc_ids or not isinstance(doc_ids, list):
+                return (page_id, page_number, paragraph_id, paragraph_number, char_start, char_end)
+            
+            # Get chunk text
+            chunk_text = row.get("text")
+            if not chunk_text or not isinstance(chunk_text, str):
+                return (page_id, page_number, paragraph_id, paragraph_number, char_start, char_end)
+            
+            # Try to match with each document's paragraphs
+            for doc_id in doc_ids:
+                if doc_id not in doc_meta_lookup:
+                    continue
+                
+                doc_meta = doc_meta_lookup[doc_id]
+                html_meta = doc_meta.get("html", {})
+                
+                # Try to find matching paragraphs
+                paragraphs = html_meta.get("paragraphs", [])
+                if not paragraphs or not isinstance(paragraphs, list):
+                    continue
+                
+                # Find paragraphs contained in this chunk
+                matching_paras = []
+                for para in paragraphs:
+                    if not isinstance(para, dict) or "text" not in para:
+                        continue
+                    
+                    para_text = para.get("text", "")
+                    if not para_text or not isinstance(para_text, str):
+                        continue
+                    
+                    # Check if paragraph is contained in chunk
+                    if para_text in chunk_text:
+                        matching_paras.append(para)
+                
+                # Use the first matching paragraph
+                if matching_paras:
+                    para = matching_paras[0]
+                    paragraph_id = para.get("para_id")
+                    paragraph_number = para.get("para_num")
+                    char_start = para.get("char_start")
+                    char_end = para.get("char_end")
+                    
+                    # Try to find page for this paragraph
+                    pages = html_meta.get("pages", [])
+                    if pages and isinstance(pages, list):
+                        # Simple heuristic - find page that contains this paragraph's position
+                        for i, page in enumerate(pages):
+                            if i < len(pages) - 1:
+                                next_page = pages[i + 1]
+                                next_page_pos = next_page.get("char_start", float("inf"))
+                                if char_start is not None and char_start < next_page_pos:
+                                    page_id = page.get("page_id")
+                                    page_number = page.get("page_num")
+                                    break
+                            else:
+                                # Last page
+                                page_id = page.get("page_id")
+                                page_number = page.get("page_num")
+                    
+                    # We found a match, no need to check other docs
+                    break
+            
+            # Return all extracted structure information
+            return (page_id, page_number, paragraph_id, paragraph_number, char_start, char_end)
+        
+        # Apply extraction to get structure columns
+        log.info("Matching chunks to paragraphs and pages")
+        structure_info = aggregated.apply(extract_html_structure, axis=1)
+        
+        # Add extracted columns
+        aggregated["page_id"], aggregated["page_number"], aggregated["paragraph_id"], \
+        aggregated["paragraph_number"], aggregated["char_position_start"], \
+        aggregated["char_position_end"] = zip(*structure_info)
+        
+        # Log results
+        non_null_pages = aggregated["page_id"].notnull().sum()
+        non_null_paras = aggregated["paragraph_id"].notnull().sum()
+        log.info(f"Added structure info to chunks: {non_null_pages} with page info, {non_null_paras} with paragraph info")
+    else:
+        log.info("No HTML metadata found, skipping structure extraction")
+        # Add empty columns
+        aggregated["page_id"] = None
+        aggregated["page_number"] = None 
+        aggregated["paragraph_id"] = None
+        aggregated["paragraph_number"] = None
+        aggregated["char_position_start"] = None
+        aggregated["char_position_end"] = None
     
     # Group documents
     aggregated = (
