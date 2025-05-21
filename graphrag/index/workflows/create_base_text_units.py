@@ -449,7 +449,7 @@ def create_base_text_units(
 
 
 def extract_html_attributes(row: pd.Series) -> Dict[str, Any]:
-    """Extract HTML attributes from existing html_attributes."""
+    """Extract HTML attributes from existing html_attributes.hgh"""
     chunk_id = row.get("id", "unknown")
     log.debug(f"Extracting HTML attributes for chunk {chunk_id}")
     
