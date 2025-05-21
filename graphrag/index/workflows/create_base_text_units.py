@@ -1,4 +1,30 @@
-# Copyright (c) 2024 Microsoft Corporation.
+def create_simplified_attributes(row: pd.Series) -> Dict[str, Any]:
+    """Create a simplified attributes dictionary from extracted fields."""
+    # Build a minimal attributes structure from already extracted columns
+    attributes = {}
+    
+    # Add page info if available
+    if row.get("page_id") is not None or row.get("page_number") is not None:
+        attributes["page"] = {
+            "id": row.get("page_id"),
+            "number": row.get("page_number")
+        }
+    
+    # Add paragraph info if available
+    if row.get("paragraph_id") is not None or row.get("paragraph_number") is not None:
+        attributes["paragraph"] = {
+            "id": row.get("paragraph_id"),
+            "number": row.get("paragraph_number")
+        }
+    
+    # Add character position info if available
+    if row.get("char_position_start") is not None or row.get("char_position_end") is not None:
+        attributes["char_position"] = {
+            "start": row.get("char_position_start"),
+            "end": row.get("char_position_end")
+        }
+    
+    return attributes# Copyright (c) 2024 Microsoft Corporation.
 # Licensed under the MIT License
 
 """A module containing run_workflow method definition."""
@@ -414,16 +440,65 @@ def create_base_text_units(
     # Process HTML structure to extract essential info from metadata.html only
     if has_html_in_metadata:
         log.info("Processing HTML structure from metadata for each chunk")
-        # Create attributes column with HTML information
+        
+        # Create a column for each HTML structure field
+        # These columns will hold the extracted values directly
+        aggregated["page_id"] = None
+        aggregated["page_number"] = None
+        aggregated["paragraph_id"] = None
+        aggregated["paragraph_number"] = None
+        aggregated["char_position_start"] = None
+        aggregated["char_position_end"] = None
+        
+        # Process each row to extract HTML structure
+        for idx, row in aggregated.iterrows():
+            # Extract HTML attributes
+            html_attrs = extract_html_attributes(row)
+            
+            # Extract page info
+            if html_attrs["page"] and isinstance(html_attrs["page"], dict):
+                aggregated.at[idx, "page_id"] = html_attrs["page"].get("id")
+                aggregated.at[idx, "page_number"] = html_attrs["page"].get("number")
+            
+            # Extract paragraph info
+            if html_attrs["paragraph"] and isinstance(html_attrs["paragraph"], dict):
+                aggregated.at[idx, "paragraph_id"] = html_attrs["paragraph"].get("id")
+                aggregated.at[idx, "paragraph_number"] = html_attrs["paragraph"].get("number")
+            
+            # Extract character position info
+            if html_attrs["char_position"] and isinstance(html_attrs["char_position"], dict):
+                aggregated.at[idx, "char_position_start"] = html_attrs["char_position"].get("start")
+                aggregated.at[idx, "char_position_end"] = html_attrs["char_position"].get("end")
+        
+        # Store a simplified version of the attributes in a column
         aggregated["attributes"] = aggregated.apply(
-            lambda row: extract_html_attributes(row), axis=1
+            lambda row: create_simplified_attributes(row), axis=1
         )
-        sample_attrs = aggregated["attributes"].iloc[0] if len(aggregated) > 0 else {}
-        log.debug(f"Sample attributes structure: {json.dumps(sample_attrs, indent=2) if isinstance(sample_attrs, dict) else sample_attrs}")
+        
+        # Log extraction statistics
+        attribute_counts = {
+            'page_ids': aggregated["page_id"].notna().sum(),
+            'paragraph_ids': aggregated["paragraph_id"].notna().sum(),
+            'char_positions': aggregated["char_position_start"].notna().sum()
+        }
+        log.info(f"HTML attribute extraction results: {attribute_counts}")
+        
+        # Sample log for debugging
+        if len(aggregated) > 0:
+            sample_row = aggregated.iloc[0]
+            log.debug(f"Sample extraction - Page: {sample_row.get('page_id')}, Para: {sample_row.get('paragraph_id')}, Char: {sample_row.get('char_position_start')}")
     else:
         # Ensure attributes column exists with empty dict value
         log.info("No HTML structure in metadata, creating empty attributes")
         aggregated["attributes"] = [{}] * len(aggregated)
+        
+        # Add empty structure columns
+        aggregated["page_id"] = None
+        aggregated["page_number"] = None
+        aggregated["paragraph_id"] = None
+        aggregated["paragraph_number"] = None
+        aggregated["char_position_start"] = None
+        aggregated["char_position_end"] = None
     
     # Ensure document_ids is always a list
     log.info("Normalizing document_ids format")
