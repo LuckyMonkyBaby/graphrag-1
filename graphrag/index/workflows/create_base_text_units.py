@@ -387,8 +387,7 @@ def create_base_text_units(
     # Report via progress callback with performance data
     callbacks.progress(Progress(
         percent=100,
-        description="Text chunking completed",
-        details=performance_summary
+        description=f"Text chunking completed: {metrics.total_chunks} chunks, {metrics.processing_time:.2f}s"
     ))
 
     log.info(
