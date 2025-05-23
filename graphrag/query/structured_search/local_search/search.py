@@ -155,4 +155,45 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
             
             return SearchResult(
                 response="",
-                context_data=c
+                context_data=context_result.context_records,
+                context_text=context_result.context_chunks,
+                completion_time=time.time() - start_time,
+                llm_calls=1,
+                prompt_tokens=num_tokens(search_prompt, self.token_encoder),
+                output_tokens=0,
+                citations=citations,
+                source_attributions=source_attributions,
+            )
+
+    async def stream_search(
+        self,
+        query: str,
+        conversation_history: ConversationHistory | None = None,
+    ) -> AsyncGenerator:
+        """Build local search context that fits a single context window and generate answer for the user query."""
+        start_time = time.time()
+
+        context_result = self.context_builder.build_context(
+            query=query,
+            conversation_history=conversation_history,
+            **self.context_builder_params,
+        )
+        log.info("GENERATE ANSWER: %s. QUERY: %s", start_time, query)
+        search_prompt = self.system_prompt.format(
+            context_data=context_result.context_chunks, response_type=self.response_type
+        )
+        history_messages = [
+            {"role": "system", "content": search_prompt},
+        ]
+
+        for callback in self.callbacks:
+            callback.on_context(context_result.context_records)
+
+        async for response in self.model.achat_stream(
+            prompt=query,
+            history=history_messages,
+            model_parameters=self.model_params,
+        ):
+            for callback in self.callbacks:
+                callback.on_llm_new_token(response)
+            yield response

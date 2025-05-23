@@ -284,4 +284,33 @@ def append_citations_to_response(
 ) -> str:
     """Append citation information to a search response.
     
- 
+    Args:
+        response: Original search response text
+        citations: Citation dictionary
+        attributions: Source attribution list  
+        include_detailed_attributions: Whether to include detailed source info
+        
+    Returns:
+        Response text with appended citation information
+    """
+    if not citations and not attributions:
+        return response
+        
+    citation_parts = []
+    
+    # Add standard citations
+    if citations:
+        citation_ref = format_citation_references(citations)
+        if citation_ref:
+            citation_parts.append(citation_ref)
+    
+    # Add detailed attributions if requested
+    if include_detailed_attributions and attributions:
+        detailed_refs = format_source_attributions(attributions)
+        if detailed_refs:
+            citation_parts.append(f"\n\nDetailed Source References:\n{detailed_refs}")
+    
+    if citation_parts:
+        return f"{response}\n\n{citation_parts[0]}" + ("".join(citation_parts[1:]) if len(citation_parts) > 1 else "")
+    
+    return response

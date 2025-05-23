@@ -488,4 +488,19 @@ class GlobalSearch(BaseSearch[GlobalContextBuilder]):
         search_prompt = self.reduce_system_prompt.format(
             report_data=text_data,
             response_type=self.response_type,
-          
+            max_length=max_length,
+        )
+        if self.allow_general_knowledge:
+            search_prompt += "\n" + self.general_knowledge_inclusion_prompt
+        search_messages = [
+            {"role": "system", "content": search_prompt},
+        ]
+
+        async for chunk_response in self.model.achat_stream(
+            prompt=query,
+            history=search_messages,
+            **llm_kwargs,
+        ):
+            for callback in self.callbacks:
+                callback.on_llm_new_token(chunk_response)
+            yield chunk_response

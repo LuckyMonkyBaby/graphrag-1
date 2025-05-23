@@ -1,0 +1,465 @@
+# GraphRAG Enterprise Scaling Configuration
+# Optimal settings for handling millions of documents with maximum performance
+
+# ============================================================================
+# CLOUD INFRASTRUCTURE CONFIGURATION - ENTERPRISE SCALE
+# ============================================================================
+cloud_storage:
+  provider: aws
+  
+  # Multi-tier storage strategy
+  document_storage: s3
+  metadata_storage: rds
+  vector_storage: lancedb
+  graph_storage: neo4j
+  
+  # AWS enterprise configuration
+  aws:
+    region: us-east-1
+    
+    # S3 configuration with lifecycle policies
+    s3_bucket: ${ENTERPRISE_GRAPHRAG_DOCS_BUCKET}
+    s3_prefix: enterprise/production/
+    
+    # High-performance RDS cluster
+    rds_endpoint: ${ENTERPRISE_RDS_CLUSTER_ENDPOINT}
+    rds_database: graphrag_enterprise
+    rds_username: ${ENTERPRISE_RDS_USERNAME}
+    # Multi-AZ deployment with read replicas
+  
+  # Enterprise LanceDB configuration
+  lancedb:
+    # Dedicated S3 bucket for vectors with cross-region replication
+    s3_bucket: ${ENTERPRISE_VECTORS_S3_BUCKET}
+    s3_region: us-east-1
+    
+    # Vector configuration optimized for scale
+    vector_column_name: embedding
+    
+    # High-performance index settings for millions of documents
+    index_type: IVF_PQ
+    num_partitions: 4096      # Maximum partitions for scale
+    num_sub_vectors: 256      # High precision for enterprise queries
+    
+    # Enterprise table naming with versioning
+    entities_table: enterprise_entities_v3
+    relationships_table: enterprise_relationships_v3
+    text_units_table: enterprise_text_units_v3
+    embeddings_table: enterprise_embeddings_v3
+    
+    # Performance optimization
+    read_consistency_level: eventual
+    write_mode: append
+  
+  # Enterprise-grade settings
+  enable_compression: true
+  encryption_at_rest: true
+  backup_enabled: true
+  connection_pool_size: 50    # High concurrency
+  timeout_seconds: 120       # Longer timeout for large operations
+  retry_attempts: 5
+  
+  # Multi-cloud failover configuration
+  failover_enabled: true
+  backup_regions: [us-west-2, eu-west-1]
+
+# ============================================================================
+# INPUT CONFIGURATION - HIGH THROUGHPUT
+# ============================================================================
+input:
+  type: file
+  file_type: pdf           # Primary format for enterprise documents
+  base_dir: ${ENTERPRISE_INPUT_DIR}
+  encoding: utf-8
+  
+  # Enterprise file processing
+  file_pattern: "**/*.{pdf,html,htm,txt,docx,pptx}"
+  
+  # Batch processing configuration
+  batch_size: 1000         # Process 1000 files per batch
+  max_concurrent_batches: 10
+  
+  # Enterprise metadata preservation
+  metadata:
+    - source_system
+    - document_category
+    - classification_level
+    - business_unit
+    - retention_policy
+    - compliance_tags
+    - access_level
+    - created_by
+    - last_modified_by
+
+# ============================================================================
+# OUTPUT CONFIGURATION - OPTIMIZED STORAGE
+# ============================================================================
+output:
+  type: blob
+  base_dir: enterprise/output/
+  
+  # High-performance parquet settings
+  parquet:
+    row_group_size: 5000000   # Large row groups for analytics
+    compression: zstd         # Best compression for large datasets
+    use_dictionary: true
+    use_byte_stream_split: true
+    
+  # Partitioning strategy for large datasets
+  partition_by: [business_unit, document_category]
+  
+  # Delta Lake integration for versioning
+  enable_delta_lake: true
+  enable_time_travel: true
+
+# ============================================================================
+# CACHE CONFIGURATION - MULTI-TIER
+# ============================================================================
+cache:
+  type: multi_tier
+  
+  # L1 Cache: Redis cluster for hot data
+  l1_cache:
+    type: redis_cluster
+    endpoints: ${REDIS_CLUSTER_ENDPOINTS}
+    max_entries: 100000
+    ttl_seconds: 3600
+  
+  # L2 Cache: S3 for warm data
+  l2_cache:
+    type: blob
+    base_dir: enterprise/cache/
+    max_entries: 1000000
+    ttl_seconds: 86400
+  
+  # Cache settings by type
+  llm_cache_max_entries: 50000
+  embedding_cache_max_entries: 500000
+  vector_cache_max_entries: 1000000
+
+# ============================================================================
+# CHUNKING CONFIGURATION - ENTERPRISE SCALE
+# ============================================================================
+chunks:
+  size: 1500              # Larger chunks for better context
+  overlap: 300            # More overlap for better coherence
+  group_by_columns: [business_unit, document_category]
+  strategy: tokens
+  encoding_model: cl100k_base
+  
+  # Enterprise citation requirements
+  prepend_metadata: true   # Include metadata for governance
+  chunk_size_includes_metadata: true
+  
+  # Parallel processing
+  max_workers: 20
+  batch_size: 5000
+
+# ============================================================================
+# LANGUAGE MODEL CONFIGURATION - HIGH THROUGHPUT
+# ============================================================================
+llm:
+  type: openai_chat
+  model: gpt-4o           # Premium model for enterprise
+  api_key: ${OPENAI_API_KEY}
+  
+  # Enterprise performance settings
+  max_tokens: 4000
+  temperature: 0.05       # Very low for consistency
+  top_p: 0.95
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  
+  # High-throughput rate limiting
+  requests_per_minute: 2000   # Enterprise tier limits
+  tokens_per_minute: 500000
+  max_retries: 15
+  
+  # Massive concurrent processing
+  concurrent_requests: 50
+  
+  # Load balancing across multiple API keys
+  api_keys: ${OPENAI_API_KEYS_LIST}  # Comma-separated list
+  load_balancing: round_robin
+
+# ============================================================================
+# EMBEDDINGS CONFIGURATION - ENTERPRISE SCALE
+# ============================================================================
+embeddings:
+  llm:
+    type: openai_embedding
+    model: text-embedding-3-large
+    api_key: ${OPENAI_API_KEY}
+    
+    # High-throughput settings
+    batch_size: 2000      # Maximum batch size
+    batch_max_tokens: 8191
+    max_retries: 15
+    
+    # Massive concurrent processing
+    concurrent_requests: 20
+    
+    # Load balancing
+    api_keys: ${OPENAI_API_KEYS_LIST}
+    load_balancing: round_robin
+  
+  # Vector storage optimization
+  vector_store_batch_size: 10000
+  enable_vector_compression: true
+
+# ============================================================================
+# ENTITY EXTRACTION - ENTERPRISE PRECISION
+# ============================================================================
+entity_extraction:
+  llm:
+    type: openai_chat
+    model: gpt-4o          # High-quality model for entities
+    max_tokens: 4000
+    temperature: 0.0       # Maximum consistency
+  
+  # Comprehensive extraction
+  max_gleanings: 3         # Multiple passes for completeness
+  entity_types: [
+    person, organization, location, event, concept, technology, 
+    product, service, regulation, policy, contract, project,
+    department, role, metric, kpi, risk, opportunity
+  ]
+  
+  # Enterprise-focused prompt
+  prompt: |
+    You are an enterprise knowledge extraction specialist. Extract all business-relevant 
+    entities from the text with focus on organizational structure, processes, technologies,
+    regulations, and key business concepts. Provide detailed descriptions that would be
+    valuable for enterprise knowledge management and compliance tracking.
+  
+  # Quality assurance
+  enable_entity_validation: true
+  confidence_threshold: 0.85
+
+# ============================================================================
+# RELATIONSHIP EXTRACTION - COMPREHENSIVE
+# ============================================================================
+relationship_extraction:
+  llm:
+    type: openai_chat
+    model: gpt-4o
+    max_tokens: 4000
+    temperature: 0.0
+  
+  max_gleanings: 3
+  
+  # Relationship validation
+  enable_relationship_validation: true
+  confidence_threshold: 0.80
+
+# ============================================================================
+# GRAPH CLUSTERING - ENTERPRISE COMMUNITIES
+# ============================================================================
+cluster_graph:
+  max_cluster_size: 50     # Larger communities for enterprise scale
+  strategy:
+    type: leiden
+    max_cluster_size: 50
+    use_lcc: true
+    seed: 0xDEADBEEF
+    resolution: 1.0        # Balanced community detection
+  
+  # Multi-level clustering
+  enable_hierarchical_clustering: true
+  max_hierarchy_levels: 4
+
+# ============================================================================
+# COMMUNITY REPORTS - EXECUTIVE SUMMARIES
+# ============================================================================
+summarize_descriptions:
+  llm:
+    type: openai_chat
+    model: gpt-4o          # Premium model for summaries
+    max_tokens: 6000       # Longer summaries for executives
+    temperature: 0.1
+  
+  max_length: 4000         # Comprehensive executive summaries
+  
+  # Multi-perspective summaries
+  perspectives: [executive, operational, technical, compliance]
+
+# ============================================================================
+# CLAIM EXTRACTION - FACT VERIFICATION
+# ============================================================================
+claim_extraction:
+  enabled: true           # Critical for enterprise fact-checking
+  
+  llm:
+    type: openai_chat
+    model: gpt-4o
+    max_tokens: 3000
+    temperature: 0.0
+  
+  max_gleanings: 2
+  description: "Verifiable business claims, metrics, and assertions"
+  
+  # Enterprise claim categories
+  claim_types: [financial, operational, strategic, compliance, risk]
+
+# ============================================================================
+# ENTERPRISE SEARCH CONFIGURATION
+# ============================================================================
+search:
+  # Enhanced enterprise citation requirements
+  enable_detailed_citations: true
+  include_file_paths: true
+  include_character_positions: true
+  include_confidence_scores: true
+  include_access_controls: true
+  
+  # Executive search configuration
+  local_search:
+    text_unit_prop: 0.6      # More text units for comprehensive answers
+    community_prop: 0.2      # More community context
+    conversation_history_max_turns: 10
+    top_k_mapped_entities: 20
+    top_k_relationships: 20
+    max_tokens: 16000        # Larger context for detailed answers
+  
+  # Strategic search configuration
+  global_search:
+    max_tokens: 20000        # Executive-level comprehensive answers
+    data_max_tokens: 16000
+    map_max_tokens: 2000     # Detailed intermediate summaries
+    reduce_max_tokens: 4000  # Comprehensive final answers
+    concurrency: 64          # High parallelism
+  
+  # Multi-tenant search isolation
+  enable_tenant_isolation: true
+  default_access_level: restricted
+
+# ============================================================================
+# WORKFLOW OPTIMIZATION - ENTERPRISE SCALE
+# ============================================================================
+workflows:
+  # Massive parallel processing
+  create_base_text_units:
+    enabled: true
+    num_threads: 16
+    batch_size: 10000
+  
+  create_final_text_units:
+    enabled: true
+    num_threads: 16
+    batch_size: 10000
+  
+  create_final_entities:
+    enabled: true
+    num_threads: 12
+    batch_size: 5000
+  
+  create_final_relationships:
+    enabled: true
+    num_threads: 12
+    batch_size: 5000
+  
+  create_final_communities:
+    enabled: true
+    num_threads: 8
+    batch_size: 1000
+  
+  create_final_community_reports:
+    enabled: true
+    num_threads: 8
+    batch_size: 500
+  
+  create_base_extracted_entities:
+    enabled: true
+    num_threads: 16
+    batch_size: 10000
+
+# ============================================================================
+# ENTERPRISE GOVERNANCE & COMPLIANCE
+# ============================================================================
+governance:
+  # Data lineage tracking
+  enable_data_lineage: true
+  lineage_storage: ${LINEAGE_DATABASE_URL}
+  
+  # Audit logging
+  enable_audit_logging: true
+  audit_storage: ${AUDIT_LOG_STORAGE}
+  
+  # Access control
+  enable_rbac: true
+  rbac_provider: ${RBAC_PROVIDER_URL}
+  
+  # Compliance monitoring
+  compliance_frameworks: [SOX, GDPR, HIPAA, SOC2]
+  enable_pii_detection: true
+  enable_sensitive_data_masking: true
+
+# ============================================================================
+# MONITORING & OBSERVABILITY
+# ============================================================================
+monitoring:
+  # Metrics collection
+  enable_prometheus_metrics: true
+  metrics_port: 9090
+  
+  # Distributed tracing
+  enable_jaeger_tracing: true
+  jaeger_endpoint: ${JAEGER_COLLECTOR_ENDPOINT}
+  
+  # Application performance monitoring
+  enable_apm: true
+  apm_service_name: graphrag-enterprise
+  
+  # Custom dashboards
+  grafana_dashboard_url: ${GRAFANA_DASHBOARD_URL}
+  
+  # Alerting thresholds
+  alerts:
+    indexing_failure_rate_threshold: 0.05    # 5% failure rate
+    search_latency_threshold_ms: 1000        # 1 second
+    storage_usage_threshold_percent: 85      # 85% storage usage
+    api_error_rate_threshold: 0.02          # 2% error rate
+
+# ============================================================================
+# PERFORMANCE TARGETS - ENTERPRISE SLA
+# ============================================================================
+sla_targets:
+  # Indexing performance
+  indexing_throughput_docs_per_hour: 50000  # 50K documents per hour
+  indexing_latency_p99_seconds: 300         # 5 minutes for 99th percentile
+  
+  # Query performance
+  search_latency_p95_ms: 500                # 500ms for 95th percentile
+  search_latency_p99_ms: 1000               # 1 second for 99th percentile
+  
+  # Availability
+  uptime_percentage: 99.9                   # 99.9% uptime
+  recovery_time_objective_minutes: 15       # 15 minutes RTO
+  recovery_point_objective_minutes: 5       # 5 minutes RPO
+  
+  # Scalability
+  max_concurrent_users: 10000               # 10K concurrent users
+  max_documents: 50000000                   # 50M documents
+  max_queries_per_second: 1000              # 1K QPS
+
+# ============================================================================
+# DISASTER RECOVERY & BUSINESS CONTINUITY
+# ============================================================================
+disaster_recovery:
+  # Multi-region backup strategy
+  primary_region: us-east-1
+  backup_regions: [us-west-2, eu-west-1]
+  
+  # Backup configuration
+  enable_automated_backups: true
+  backup_frequency_hours: 6                 # Every 6 hours
+  backup_retention_days: 90                 # 90 days retention
+  
+  # Cross-region replication
+  enable_cross_region_replication: true
+  replication_lag_threshold_minutes: 15
+  
+  # Failover configuration
+  enable_automatic_failover: true
+  failover_threshold_minutes: 10
+  health_check_interval_seconds: 30

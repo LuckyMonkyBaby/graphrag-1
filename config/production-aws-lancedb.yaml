@@ -1,0 +1,325 @@
+# GraphRAG Production Configuration - AWS + LanceDB Hybrid
+# Optimal settings for enterprise deployment with enhanced citations
+
+# ============================================================================
+# CLOUD INFRASTRUCTURE CONFIGURATION
+# ============================================================================
+cloud_storage:
+  provider: aws
+  
+  # Storage backend configuration
+  document_storage: s3
+  metadata_storage: rds
+  vector_storage: lancedb
+  graph_storage: neo4j
+  
+  # AWS-specific configuration
+  aws:
+    region: us-east-1
+    
+    # S3 configuration for document storage
+    s3_bucket: ${GRAPHRAG_S3_BUCKET}
+    s3_prefix: graphrag/production/v2/
+    
+    # RDS PostgreSQL for metadata
+    rds_endpoint: ${GRAPHRAG_RDS_ENDPOINT}
+    rds_database: graphrag_production
+    rds_username: ${GRAPHRAG_RDS_USERNAME}
+    # rds_password: Set via GRAPHRAG_RDS_PASSWORD environment variable
+  
+  # LanceDB configuration for high-performance vectors
+  lancedb:
+    # S3 backend for unlimited scale
+    s3_bucket: ${GRAPHRAG_VECTORS_S3_BUCKET}
+    s3_region: us-east-1
+    
+    # Vector configuration
+    vector_column_name: embedding
+    
+    # Optimal index settings for production
+    index_type: IVF_PQ
+    num_partitions: 1024      # High partitions for large datasets
+    num_sub_vectors: 128      # Balance between speed and accuracy
+    
+    # Table naming for production
+    entities_table: prod_entities_v2
+    relationships_table: prod_relationships_v2
+    text_units_table: prod_text_units_v2
+    embeddings_table: prod_embeddings_v2
+    
+    # Performance settings
+    read_consistency_level: eventual
+    write_mode: append
+  
+  # General cloud settings
+  enable_compression: true
+  encryption_at_rest: true
+  backup_enabled: true
+  connection_pool_size: 20
+  timeout_seconds: 60
+  retry_attempts: 3
+
+# ============================================================================
+# INPUT CONFIGURATION
+# ============================================================================
+input:
+  type: file
+  file_type: pdf  # Support for PDF, HTML, and text
+  base_dir: ${GRAPHRAG_INPUT_DIR}
+  encoding: utf-8
+  
+  # File processing settings
+  file_pattern: "**/*.{pdf,html,htm,txt}"
+  
+  # Metadata columns to preserve
+  metadata:
+    - source_system
+    - document_category
+    - access_level
+    - retention_policy
+
+# ============================================================================
+# OUTPUT CONFIGURATION  
+# ============================================================================
+output:
+  type: blob  # Use blob storage for S3
+  base_dir: graphrag/output/
+  
+  # Parquet optimization for large datasets
+  parquet:
+    row_group_size: 1000000
+    compression: zstd
+    use_dictionary: true
+
+# ============================================================================
+# CACHE CONFIGURATION
+# ============================================================================
+cache:
+  type: blob  # S3-based caching
+  base_dir: graphrag/cache/
+  
+  # Cache settings
+  llm_cache_max_entries: 10000
+  embedding_cache_max_entries: 50000
+  
+# ============================================================================
+# CHUNKING CONFIGURATION
+# ============================================================================
+chunks:
+  size: 1200              # Optimal for citation granularity
+  overlap: 200            # Good balance for context preservation
+  group_by_columns: [id]
+  strategy: tokens        # Token-based chunking for consistency
+  encoding_model: cl100k_base
+  
+  # Citation preservation settings
+  prepend_metadata: false
+  chunk_size_includes_metadata: false
+
+# ============================================================================
+# LANGUAGE MODEL CONFIGURATION
+# ============================================================================
+llm:
+  type: openai_chat
+  model: gpt-4o           # Latest model for best performance
+  api_key: ${OPENAI_API_KEY}
+  
+  # Performance settings
+  max_tokens: 4000
+  temperature: 0.1        # Low temperature for consistency
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  
+  # Rate limiting
+  requests_per_minute: 500
+  tokens_per_minute: 150000
+  max_retries: 10
+  
+  # Concurrent processing
+  concurrent_requests: 10
+
+# ============================================================================
+# EMBEDDINGS CONFIGURATION
+# ============================================================================
+embeddings:
+  llm:
+    type: openai_embedding
+    model: text-embedding-3-large  # Best embedding model
+    api_key: ${OPENAI_API_KEY}
+    
+    # Performance settings
+    batch_size: 1000      # Optimal batch size for OpenAI
+    batch_max_tokens: 8191
+    max_retries: 10
+    
+    # Concurrent processing
+    concurrent_requests: 5
+
+# ============================================================================
+# ENTITY EXTRACTION CONFIGURATION
+# ============================================================================
+entity_extraction:
+  # LLM settings for entity extraction
+  llm:
+    type: openai_chat
+    model: gpt-4o-mini    # Cost-effective for extraction
+    max_tokens: 3000
+    temperature: 0.0      # Zero temperature for consistency
+  
+  # Extraction settings
+  max_gleanings: 2        # Additional passes for completeness
+  entity_types: [person, organization, location, event, concept, technology]
+  
+  # Prompt configuration
+  prompt: |
+    You are an expert at identifying and extracting entities from text.
+    Extract all relevant entities including their types and descriptions.
+    Focus on entities that would be useful for knowledge graph construction.
+
+# ============================================================================
+# RELATIONSHIP EXTRACTION CONFIGURATION
+# ============================================================================
+relationship_extraction:
+  llm:
+    type: openai_chat
+    model: gpt-4o-mini
+    max_tokens: 3000
+    temperature: 0.0
+  
+  max_gleanings: 2
+
+# ============================================================================
+# GRAPH CLUSTERING CONFIGURATION
+# ============================================================================
+cluster_graph:
+  max_cluster_size: 20     # Optimal for community detection
+  strategy:
+    type: leiden           # Best algorithm for modularity
+    max_cluster_size: 20
+    use_lcc: true         # Use largest connected component
+    seed: 0xDEADBEEF      # Reproducible clustering
+
+# ============================================================================
+# COMMUNITY REPORTS CONFIGURATION
+# ============================================================================
+summarize_descriptions:
+  llm:
+    type: openai_chat
+    model: gpt-4o         # High-quality model for summaries
+    max_tokens: 4000
+    temperature: 0.1
+  
+  max_length: 2000        # Comprehensive but focused summaries
+
+# ============================================================================
+# CLAIM EXTRACTION CONFIGURATION (Optional)
+# ============================================================================
+claim_extraction:
+  enabled: true           # Enable for enhanced fact verification
+  
+  llm:
+    type: openai_chat
+    model: gpt-4o-mini
+    max_tokens: 2000
+    temperature: 0.0
+  
+  max_gleanings: 1
+  description: "Structured claims and facts from the text"
+
+# ============================================================================
+# UMAP CONFIGURATION (Optional)
+# ============================================================================
+umap:
+  enabled: false          # Disable for production unless needed
+
+# ============================================================================
+# SNAPSHOTS CONFIGURATION
+# ============================================================================
+snapshots:
+  graphml: true           # Enable GraphML export
+  raw_entities: true      # Export raw entities
+  top_level_nodes: true   # Export top-level nodes
+
+# ============================================================================
+# REPORTING CONFIGURATION
+# ============================================================================
+reporting:
+  type: file
+  base_dir: logs/
+  
+  # Logging configuration
+  connection_string: null
+  container_name: null
+  storage_account_blob_url: null
+
+# ============================================================================
+# CITATION AND SEARCH CONFIGURATION
+# ============================================================================
+search:
+  # Enhanced citation settings
+  enable_detailed_citations: true
+  include_file_paths: true
+  include_character_positions: true
+  
+  # Local search configuration
+  local_search:
+    text_unit_prop: 0.5
+    community_prop: 0.1
+    conversation_history_max_turns: 5
+    top_k_mapped_entities: 10
+    top_k_relationships: 10
+    max_tokens: 12000
+  
+  # Global search configuration  
+  global_search:
+    max_tokens: 12000
+    data_max_tokens: 12000
+    map_max_tokens: 1000
+    reduce_max_tokens: 2000
+    concurrency: 32
+
+# ============================================================================
+# WORKFLOW OPTIMIZATION
+# ============================================================================
+workflows:
+  # Parallel processing settings
+  create_base_text_units:
+    enabled: true
+    num_threads: 4
+  
+  create_final_text_units:
+    enabled: true
+    num_threads: 4
+  
+  create_final_entities:
+    enabled: true
+    num_threads: 4
+  
+  create_final_relationships:
+    enabled: true
+    num_threads: 4
+  
+  create_final_communities:
+    enabled: true
+    num_threads: 2
+  
+  create_final_community_reports:
+    enabled: true
+    num_threads: 2
+  
+  create_base_extracted_entities:
+    enabled: true
+    num_threads: 4
+
+# ============================================================================
+# ENVIRONMENT-SPECIFIC OVERRIDES
+# ============================================================================
+# These can be overridden by environment variables:
+# GRAPHRAG_S3_BUCKET
+# GRAPHRAG_VECTORS_S3_BUCKET  
+# GRAPHRAG_RDS_ENDPOINT
+# GRAPHRAG_RDS_USERNAME
+# GRAPHRAG_RDS_PASSWORD
+# OPENAI_API_KEY
+# GRAPHRAG_INPUT_DIR

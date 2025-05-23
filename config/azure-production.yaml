@@ -1,0 +1,356 @@
+# GraphRAG Production Configuration - Azure Native
+# Optimal settings for enterprise Azure deployment
+
+# ============================================================================
+# CLOUD INFRASTRUCTURE CONFIGURATION
+# ============================================================================
+cloud_storage:
+  provider: azure
+  
+  # Azure storage backends
+  document_storage: azure_blob
+  metadata_storage: cosmos_db
+  vector_storage: azure_ai_search
+  graph_storage: azure_cosmos_gremlin
+  
+  # Azure-specific configuration
+  azure:
+    subscription_id: ${AZURE_SUBSCRIPTION_ID}
+    resource_group: ${AZURE_RESOURCE_GROUP}
+    
+    # Azure Blob Storage for documents
+    storage_account_name: ${AZURE_STORAGE_ACCOUNT}
+    storage_container: graphrag-documents
+    
+    # Cosmos DB for metadata
+    cosmos_account_name: ${AZURE_COSMOS_ACCOUNT}
+    cosmos_database: graphrag-production
+    
+    # Azure AI Search for vectors
+    search_service_name: ${AZURE_SEARCH_SERVICE}
+    search_index_prefix: graphrag-prod-
+  
+  # General cloud settings
+  enable_compression: true
+  encryption_at_rest: true
+  backup_enabled: true
+  connection_pool_size: 20
+  timeout_seconds: 60
+  retry_attempts: 3
+
+# ============================================================================
+# INPUT CONFIGURATION
+# ============================================================================
+input:
+  type: blob              # Azure Blob Storage
+  file_type: pdf
+  base_dir: input/
+  encoding: utf-8
+  
+  # Azure Blob configuration
+  connection_string: ${AZURE_STORAGE_CONNECTION_STRING}
+  container_name: graphrag-input
+  
+  # File processing settings
+  file_pattern: "**/*.{pdf,html,htm,txt,docx}"
+  
+  # Metadata preservation
+  metadata:
+    - source_system
+    - document_category
+    - classification_level
+    - retention_period
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  type: blob
+  base_dir: output/
+  
+  # Azure Blob configuration
+  connection_string: ${AZURE_STORAGE_CONNECTION_STRING}
+  container_name: graphrag-output
+  
+  # Parquet optimization
+  parquet:
+    row_group_size: 1000000
+    compression: zstd
+    use_dictionary: true
+
+# ============================================================================
+# CACHE CONFIGURATION
+# ============================================================================
+cache:
+  type: blob
+  base_dir: cache/
+  
+  # Azure Blob cache configuration
+  connection_string: ${AZURE_STORAGE_CONNECTION_STRING}
+  container_name: graphrag-cache
+  
+  # Cache settings
+  llm_cache_max_entries: 15000
+  embedding_cache_max_entries: 75000
+
+# ============================================================================
+# CHUNKING CONFIGURATION
+# ============================================================================
+chunks:
+  size: 1200              # Optimal for Azure AI Search
+  overlap: 200
+  group_by_columns: [id]
+  strategy: tokens
+  encoding_model: cl100k_base
+  
+  # Citation preservation
+  prepend_metadata: false
+  chunk_size_includes_metadata: false
+
+# ============================================================================
+# LANGUAGE MODEL CONFIGURATION
+# ============================================================================
+llm:
+  type: azure_openai_chat
+  model: gpt-4o           # Azure OpenAI model
+  api_base: ${AZURE_OPENAI_ENDPOINT}
+  api_key: ${AZURE_OPENAI_API_KEY}
+  api_version: "2024-06-01"
+  deployment_name: gpt-4o-deployment
+  
+  # Performance settings
+  max_tokens: 4000
+  temperature: 0.1
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  
+  # Azure-specific rate limiting
+  requests_per_minute: 300  # Adjust based on Azure quota
+  tokens_per_minute: 120000
+  max_retries: 10
+  
+  # Concurrent processing
+  concurrent_requests: 8
+
+# ============================================================================
+# EMBEDDINGS CONFIGURATION
+# ============================================================================
+embeddings:
+  llm:
+    type: azure_openai_embedding
+    model: text-embedding-3-large
+    api_base: ${AZURE_OPENAI_ENDPOINT}
+    api_key: ${AZURE_OPENAI_API_KEY}
+    api_version: "2024-06-01"
+    deployment_name: text-embedding-3-large-deployment
+    
+    # Performance settings
+    batch_size: 500       # Conservative for Azure
+    batch_max_tokens: 8191
+    max_retries: 10
+    
+    # Concurrent processing
+    concurrent_requests: 4
+
+# ============================================================================
+# ENTITY EXTRACTION CONFIGURATION
+# ============================================================================
+entity_extraction:
+  llm:
+    type: azure_openai_chat
+    model: gpt-4o-mini
+    api_base: ${AZURE_OPENAI_ENDPOINT}
+    api_key: ${AZURE_OPENAI_API_KEY}
+    api_version: "2024-06-01"
+    deployment_name: gpt-4o-mini-deployment
+    max_tokens: 3000
+    temperature: 0.0
+  
+  max_gleanings: 2
+  entity_types: [person, organization, location, event, concept, technology, product]
+  
+  # Enhanced prompt for Azure deployment
+  prompt: |
+    You are an expert knowledge analyst. Extract all significant entities from the text.
+    Focus on entities that would be valuable in an enterprise knowledge graph.
+    Provide clear descriptions and classify entities appropriately.
+
+# ============================================================================
+# RELATIONSHIP EXTRACTION CONFIGURATION
+# ============================================================================
+relationship_extraction:
+  llm:
+    type: azure_openai_chat
+    model: gpt-4o-mini
+    api_base: ${AZURE_OPENAI_ENDPOINT}
+    api_key: ${AZURE_OPENAI_API_KEY}
+    api_version: "2024-06-01"
+    deployment_name: gpt-4o-mini-deployment
+    max_tokens: 3000
+    temperature: 0.0
+  
+  max_gleanings: 2
+
+# ============================================================================
+# GRAPH CLUSTERING CONFIGURATION
+# ============================================================================
+cluster_graph:
+  max_cluster_size: 25     # Larger for enterprise datasets
+  strategy:
+    type: leiden
+    max_cluster_size: 25
+    use_lcc: true
+    seed: 0xDEADBEEF
+
+# ============================================================================
+# COMMUNITY REPORTS CONFIGURATION
+# ============================================================================
+summarize_descriptions:
+  llm:
+    type: azure_openai_chat
+    model: gpt-4o
+    api_base: ${AZURE_OPENAI_ENDPOINT}
+    api_key: ${AZURE_OPENAI_API_KEY}
+    api_version: "2024-06-01"
+    deployment_name: gpt-4o-deployment
+    max_tokens: 4000
+    temperature: 0.1
+  
+  max_length: 2500        # Comprehensive summaries
+
+# ============================================================================
+# CLAIM EXTRACTION CONFIGURATION
+# ============================================================================
+claim_extraction:
+  enabled: true
+  
+  llm:
+    type: azure_openai_chat
+    model: gpt-4o-mini
+    api_base: ${AZURE_OPENAI_ENDPOINT}
+    api_key: ${AZURE_OPENAI_API_KEY}
+    api_version: "2024-06-01"
+    deployment_name: gpt-4o-mini-deployment
+    max_tokens: 2000
+    temperature: 0.0
+  
+  max_gleanings: 1
+  description: "Structured claims and verifiable facts"
+
+# ============================================================================
+# UMAP CONFIGURATION
+# ============================================================================
+umap:
+  enabled: false          # Disable for production
+
+# ============================================================================
+# SNAPSHOTS CONFIGURATION
+# ============================================================================
+snapshots:
+  graphml: true
+  raw_entities: true
+  top_level_nodes: true
+
+# ============================================================================
+# REPORTING CONFIGURATION
+# ============================================================================
+reporting:
+  type: blob
+  base_dir: reports/
+  
+  # Azure Blob configuration
+  connection_string: ${AZURE_STORAGE_CONNECTION_STRING}
+  container_name: graphrag-reports
+
+# ============================================================================
+# CITATION AND SEARCH CONFIGURATION
+# ============================================================================
+search:
+  # Enhanced citation settings for Azure
+  enable_detailed_citations: true
+  include_file_paths: true
+  include_character_positions: true
+  azure_integration: true
+  
+  # Local search configuration
+  local_search:
+    text_unit_prop: 0.5
+    community_prop: 0.1
+    conversation_history_max_turns: 5
+    top_k_mapped_entities: 12
+    top_k_relationships: 12
+    max_tokens: 12000
+  
+  # Global search configuration
+  global_search:
+    max_tokens: 12000
+    data_max_tokens: 12000
+    map_max_tokens: 1000
+    reduce_max_tokens: 2000
+    concurrency: 16       # Moderate for Azure
+
+# ============================================================================
+# WORKFLOW OPTIMIZATION
+# ============================================================================
+workflows:
+  # Parallel processing optimized for Azure
+  create_base_text_units:
+    enabled: true
+    num_threads: 6
+  
+  create_final_text_units:
+    enabled: true
+    num_threads: 6
+  
+  create_final_entities:
+    enabled: true
+    num_threads: 6
+  
+  create_final_relationships:
+    enabled: true
+    num_threads: 6
+  
+  create_final_communities:
+    enabled: true
+    num_threads: 3
+  
+  create_final_community_reports:
+    enabled: true
+    num_threads: 3
+  
+  create_base_extracted_entities:
+    enabled: true
+    num_threads: 6
+
+# ============================================================================
+# AZURE-SPECIFIC OPTIMIZATIONS
+# ============================================================================
+azure_optimizations:
+  # Azure AI Search settings
+  search_service_tier: Standard  # S1 or higher for production
+  search_replica_count: 2
+  search_partition_count: 2
+  
+  # Cosmos DB settings
+  cosmos_throughput_type: provisioned  # or serverless for variable workloads
+  cosmos_max_throughput: 4000
+  cosmos_consistency_level: session
+  
+  # Blob Storage settings
+  storage_tier: hot        # Hot tier for frequently accessed data
+  storage_replication: LRS # Locally redundant storage
+  enable_soft_delete: true
+  soft_delete_retention_days: 7
+
+# ============================================================================
+# ENVIRONMENT VARIABLES REQUIRED
+# ============================================================================
+# AZURE_SUBSCRIPTION_ID
+# AZURE_RESOURCE_GROUP
+# AZURE_STORAGE_ACCOUNT
+# AZURE_COSMOS_ACCOUNT
+# AZURE_SEARCH_SERVICE
+# AZURE_STORAGE_CONNECTION_STRING
+# AZURE_OPENAI_ENDPOINT
+# AZURE_OPENAI_API_KEY

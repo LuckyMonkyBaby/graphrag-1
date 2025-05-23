@@ -1,0 +1,274 @@
+# GraphRAG Development Configuration - Local LanceDB
+# Optimal settings for development and testing with local infrastructure
+
+# ============================================================================
+# CLOUD INFRASTRUCTURE CONFIGURATION
+# ============================================================================
+cloud_storage:
+  provider: local
+  
+  # Local storage backends
+  document_storage: file_system
+  metadata_storage: sqlite
+  vector_storage: lancedb
+  graph_storage: networkx
+  
+  # LanceDB local configuration
+  lancedb:
+    # Local storage path
+    storage_path: ./data/lancedb
+    
+    # Vector configuration
+    vector_column_name: embedding
+    
+    # Development index settings (smaller for faster startup)
+    index_type: IVF_PQ
+    num_partitions: 64        # Smaller for development
+    num_sub_vectors: 32       # Faster indexing
+    
+    # Table naming for development
+    entities_table: dev_entities
+    relationships_table: dev_relationships
+    text_units_table: dev_text_units
+    embeddings_table: dev_embeddings
+    
+    # Performance settings
+    read_consistency_level: strong
+    write_mode: overwrite
+  
+  # General settings
+  enable_compression: false   # Faster for development
+  encryption_at_rest: false  # Not needed for dev
+  backup_enabled: false      # Not needed for dev
+  connection_pool_size: 5
+  timeout_seconds: 30
+  retry_attempts: 2
+
+# ============================================================================
+# INPUT CONFIGURATION
+# ============================================================================
+input:
+  type: file
+  file_type: text           # Start with text for development
+  base_dir: ./input
+  encoding: utf-8
+  
+  # Simple file pattern for development
+  file_pattern: "*.{txt,md}"
+
+# ============================================================================
+# OUTPUT CONFIGURATION
+# ============================================================================
+output:
+  type: file
+  base_dir: ./output
+  
+  # Simple parquet settings for development
+  parquet:
+    row_group_size: 100000
+    compression: snappy     # Faster than zstd for development
+    use_dictionary: true
+
+# ============================================================================
+# CACHE CONFIGURATION
+# ============================================================================
+cache:
+  type: file
+  base_dir: ./cache
+  
+  # Smaller cache for development
+  llm_cache_max_entries: 1000
+  embedding_cache_max_entries: 5000
+
+# ============================================================================
+# CHUNKING CONFIGURATION
+# ============================================================================
+chunks:
+  size: 800               # Smaller chunks for faster processing
+  overlap: 100            # Less overlap for speed
+  group_by_columns: [id]
+  strategy: tokens
+  encoding_model: cl100k_base
+  
+  # Citation preservation settings
+  prepend_metadata: false
+  chunk_size_includes_metadata: false
+
+# ============================================================================
+# LANGUAGE MODEL CONFIGURATION
+# ============================================================================
+llm:
+  type: openai_chat
+  model: gpt-4o-mini      # Cost-effective for development
+  api_key: ${OPENAI_API_KEY}
+  
+  # Conservative settings for development
+  max_tokens: 2000
+  temperature: 0.1
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  
+  # Lower rate limits for development
+  requests_per_minute: 100
+  tokens_per_minute: 50000
+  max_retries: 5
+  
+  # Sequential processing for development
+  concurrent_requests: 2
+
+# ============================================================================
+# EMBEDDINGS CONFIGURATION
+# ============================================================================
+embeddings:
+  llm:
+    type: openai_embedding
+    model: text-embedding-3-small  # Smaller model for development
+    api_key: ${OPENAI_API_KEY}
+    
+    # Development settings
+    batch_size: 100       # Smaller batches
+    batch_max_tokens: 8191
+    max_retries: 5
+    
+    # Sequential processing
+    concurrent_requests: 1
+
+# ============================================================================
+# ENTITY EXTRACTION CONFIGURATION
+# ============================================================================
+entity_extraction:
+  llm:
+    type: openai_chat
+    model: gpt-4o-mini    # Cost-effective
+    max_tokens: 1500
+    temperature: 0.0
+  
+  # Minimal gleanings for speed
+  max_gleanings: 1
+  entity_types: [person, organization, concept]
+  
+  # Simple prompt for development
+  prompt: |
+    Extract the main entities from this text.
+    Focus on people, organizations, and key concepts.
+
+# ============================================================================
+# RELATIONSHIP EXTRACTION CONFIGURATION
+# ============================================================================
+relationship_extraction:
+  llm:
+    type: openai_chat
+    model: gpt-4o-mini
+    max_tokens: 1500
+    temperature: 0.0
+  
+  max_gleanings: 1
+
+# ============================================================================
+# GRAPH CLUSTERING CONFIGURATION
+# ============================================================================
+cluster_graph:
+  max_cluster_size: 10     # Smaller for development
+  strategy:
+    type: leiden
+    max_cluster_size: 10
+    use_lcc: true
+    seed: 0xDEADBEEF
+
+# ============================================================================
+# COMMUNITY REPORTS CONFIGURATION
+# ============================================================================
+summarize_descriptions:
+  llm:
+    type: openai_chat
+    model: gpt-4o-mini    # Cost-effective for development
+    max_tokens: 1500
+    temperature: 0.1
+  
+  max_length: 1000        # Shorter summaries for development
+
+# ============================================================================
+# CLAIM EXTRACTION CONFIGURATION
+# ============================================================================
+claim_extraction:
+  enabled: false          # Disable for faster development
+
+# ============================================================================
+# UMAP CONFIGURATION
+# ============================================================================
+umap:
+  enabled: false          # Disable for development
+
+# ============================================================================
+# SNAPSHOTS CONFIGURATION
+# ============================================================================
+snapshots:
+  graphml: true
+  raw_entities: true
+  top_level_nodes: true
+
+# ============================================================================
+# REPORTING CONFIGURATION
+# ============================================================================
+reporting:
+  type: console           # Console output for development
+  base_dir: logs/
+
+# ============================================================================
+# CITATION AND SEARCH CONFIGURATION
+# ============================================================================
+search:
+  # Enhanced citation settings
+  enable_detailed_citations: true
+  include_file_paths: true
+  include_character_positions: true
+  
+  # Smaller context windows for development
+  local_search:
+    text_unit_prop: 0.5
+    community_prop: 0.1
+    conversation_history_max_turns: 3
+    top_k_mapped_entities: 5
+    top_k_relationships: 5
+    max_tokens: 8000
+  
+  global_search:
+    max_tokens: 8000
+    data_max_tokens: 8000
+    map_max_tokens: 500
+    reduce_max_tokens: 1000
+    concurrency: 2        # Lower concurrency for development
+
+# ============================================================================
+# WORKFLOW OPTIMIZATION
+# ============================================================================
+workflows:
+  # Single-threaded for development
+  create_base_text_units:
+    enabled: true
+    num_threads: 1
+  
+  create_final_text_units:
+    enabled: true
+    num_threads: 1
+  
+  create_final_entities:
+    enabled: true
+    num_threads: 1
+  
+  create_final_relationships:
+    enabled: true
+    num_threads: 1
+  
+  create_final_communities:
+    enabled: true
+    num_threads: 1
+  
+  create_final_community_reports:
+    enabled: true
+    num_threads: 1
+  
+  create_base_extracted_entities:
+    enabled: true
+    num_threads: 1

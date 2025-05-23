@@ -581,4 +581,4 @@ def find_chunk_paragraph_info(chunk_text: str, paragraphs: list) -> dict:
     except Exception as e:
         log.debug(f"Error finding paragraph info: {e}")
     
-    retu
+    return {}

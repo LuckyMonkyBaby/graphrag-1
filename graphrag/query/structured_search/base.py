@@ -88,4 +88,7 @@ class BaseSearch(ABC, Generic[T]):
         query: str,
         conversation_history: ConversationHistory | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream search for the giv
+        """Stream search for the given query."""
+        yield ""  # This makes it an async generator.
+        msg = "Subclasses must implement this method"
+        raise NotImplementedError(msg)
