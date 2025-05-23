@@ -273,8 +273,8 @@ def create_final_text_units(
 
 
 def simplify_attributes(attrs):
-    """Simplify attributes to ensure proper serialization."""
-    log.info("Simplifying attributes for Parquet serialization")
+    """Process attributes while preserving primary structural information."""
+    log.info("Processing attributes while preserving primary structural data")
     
     # Handle None values
     if attrs is None:
@@ -302,56 +302,61 @@ def simplify_attributes(attrs):
     except Exception as e:
         log.warning(f"Error logging attributes: {e}")
     
-    # Create simplified version keeping HTML structure fields
+    # Create result preserving PRIMARY structural information
     result = {}
     
-    # Include only essential fields, removing large arrays and ensuring flat structure
+    # PRESERVE HTML structure including pages and paragraphs
     if "html" in attrs and isinstance(attrs["html"], dict):
         html = attrs["html"]
         log.debug(f"Processing HTML attributes with keys: {list(html.keys())}")
         
-        # Create a flattened structure with only primitive types
+        # Create structure preserving ALL HTML information
         html_result = {}
         for key, value in html.items():
-            if key not in ["pages", "paragraphs"] and isinstance(value, (str, int, float, bool, type(None))):
+            if isinstance(value, (str, int, float, bool, type(None))):
                 html_result[key] = value
                 log.debug(f"Keeping HTML property {key}: {value}")
-            else:
-                if key in ["pages", "paragraphs"]:
-                    array_len = len(value) if isinstance(value, list) else "not a list"
-                    log.debug(f"Removing large array '{key}' with {array_len} elements")
+            elif key in ["pages", "paragraphs"]:
+                # CRITICAL: These are PRIMARY structural attributes - NEVER remove them
+                html_result[key] = value
+                if isinstance(value, list):
+                    log.info(f"PRESERVED PRIMARY structural array '{key}' with {len(value)} elements")
                 else:
-                    log.debug(f"Removing non-primitive HTML property {key}: {type(value)}")
+                    log.info(f"PRESERVED PRIMARY structural data '{key}': {type(value)}")
+            else:
+                # For other complex objects, preserve but ensure serializable
+                try:
+                    # Try to keep as-is if it's already serializable
+                    json.dumps(value)
+                    html_result[key] = value
+                    log.debug(f"Keeping serializable HTML property {key}")
+                except (TypeError, ValueError):
+                    # Convert to string if not serializable
+                    html_result[key] = str(value) if value is not None else None
+                    log.debug(f"Converted non-serializable HTML property {key} to string")
         
         result["html"] = html_result
     
-    # Process page and paragraph data - flatten nested structures
+    # PRESERVE page, paragraph, and char_position data as PRIMARY attributes
     for key in ["page", "paragraph", "char_position"]:
         if key in attrs and attrs[key]:
-            log.debug(f"Processing {key} attribute: {attrs[key]}")
+            log.debug(f"Processing PRIMARY attribute {key}: {attrs[key]}")
+            
+            # Keep the full structure for primary attributes
             if isinstance(attrs[key], dict):
-                # Extract only primitive values
-                key_result = {}
-                for k, v in attrs[key].items():
-                    if isinstance(v, (str, int, float, bool, type(None))):
-                        key_result[k] = v
-                        log.debug(f"Keeping {key}.{k}: {v}")
-                    else:
-                        log.debug(f"Removing non-primitive {key}.{k}: {type(v)}")
-                result[key] = key_result
+                # Preserve the entire dictionary for primary structural data
+                result[key] = attrs[key]
+                log.info(f"PRESERVED PRIMARY attribute {key} with full structure")
             else:
-                # If it's already a primitive value, keep it
-                if isinstance(attrs[key], (str, int, float, bool)):
-                    result[key] = attrs[key]
-                    log.debug(f"Keeping primitive {key}: {attrs[key]}")
-                else:
-                    log.debug(f"Removing non-primitive {key}: {type(attrs[key])}")
+                # Keep non-dict values as-is
+                result[key] = attrs[key]
+                log.info(f"PRESERVED PRIMARY attribute {key}: {type(attrs[key])}")
     
     # Log the final result
-    log.info(f"Simplified attributes: {result}")
+    preserved_keys = list(result.keys())
+    log.info(f"Attributes processed with PRIMARY structural data preserved: {preserved_keys}")
     
     return result
-
 
 def _entities(df: pd.DataFrame) -> pd.DataFrame:
     """Extract entity IDs for each text unit."""

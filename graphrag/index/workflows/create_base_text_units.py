@@ -7,6 +7,11 @@ import pandas as pd
 from graphrag.callbacks.workflow_callbacks import WorkflowCallbacks
 from graphrag.config.models.chunking_config import ChunkStrategyType
 from graphrag.config.models.graph_rag_config import GraphRagConfig
+from graphrag.data_model.schemas import (
+    PAGE_ID, PAGE_NUMBER, 
+    PARAGRAPH_ID, PARAGRAPH_NUMBER,
+    CHAR_POSITION_START, CHAR_POSITION_END
+)
 from graphrag.index.operations.chunk_text.chunk_text import chunk_text
 from graphrag.index.operations.chunk_text.strategies import get_encoding_fn
 from graphrag.index.typing.context import PipelineRunContext
@@ -200,19 +205,28 @@ def create_base_text_units(
                     # Create base chunk
                     base_chunk = (chunk[0], chunk[1], chunk[2])
                     
-                    # Add basic metadata without large arrays
+                    # Create comprehensive chunk metadata preserving ALL structural information
                     chunk_meta = {}
                     if isinstance(html_meta, dict):
-                        # Copy basic HTML properties
+                        # PRESERVE ALL HTML properties including pages and paragraphs
                         chunk_meta = {
                             "html": {
                                 "doc_type": html_meta.get("doc_type"),
                                 "has_pages": html_meta.get("has_pages", False),
                                 "has_paragraphs": html_meta.get("has_paragraphs", False),
                                 "page_count": html_meta.get("page_count", 0),
-                                "paragraph_count": html_meta.get("paragraph_count", 0)
+                                "paragraph_count": html_meta.get("paragraph_count", 0),
+                                # CRITICAL: PRESERVE primary structural data
+                                "pages": html_meta.get("pages", []),
+                                "paragraphs": html_meta.get("paragraphs", [])
                             }
                         }
+                        
+                        # Add chunk-specific positioning if we can determine it
+                        chunk_text = chunk[1] if len(chunk) > 1 else ""
+                        chunk_position = determine_chunk_position(chunk_text, html_meta)
+                        if chunk_position:
+                            chunk_meta.update(chunk_position)
                     
                     # Store enhanced chunk
                     chunked[i] = (*base_chunk, chunk_meta)
@@ -289,16 +303,16 @@ def create_base_text_units(
     
     # Add HTML structure columns if metadata contains HTML
     if "chunk_metadata" in aggregated.columns and has_html_in_metadata:
-        # Add structure columns with default None values
-        aggregated["page_id"] = None
-        aggregated["page_number"] = None
-        aggregated["paragraph_id"] = None
-        aggregated["paragraph_number"] = None
-        aggregated["char_position_start"] = None
-        aggregated["char_position_end"] = None
+        # Initialize structural columns with default None values
+        aggregated[PAGE_ID] = None
+        aggregated[PAGE_NUMBER] = None
+        aggregated[PARAGRAPH_ID] = None
+        aggregated[PARAGRAPH_NUMBER] = None
+        aggregated[CHAR_POSITION_START] = None
+        aggregated[CHAR_POSITION_END] = None
         
-        # Create attributes from structured info
-        log.info("Creating attributes column")
+        # Create attributes from structured info preserving PRIMARY data
+        log.info("Creating attributes column with preserved structural data")
         aggregated["attributes"] = aggregated.apply(
             lambda row: create_attributes(row.get("chunk_metadata", None)), axis=1
         )
@@ -309,12 +323,22 @@ def create_base_text_units(
             lambda x: json.dumps(x) if x is not None else "{}"
         )
         
+        # EXTRACT structural information to dedicated columns
+        log.info("Extracting structural information to dedicated columns")
+        aggregated = extract_structural_columns(aggregated)
+        
         # Remove temporary column
         if "chunk_metadata" in aggregated.columns:
             aggregated = aggregated.drop(columns=["chunk_metadata"])
     else:
-        # Create empty attributes column as JSON strings
+        # Create empty attributes column as JSON strings and initialize structural columns
         aggregated["attributes"] = ["{}"] * len(aggregated)
+        aggregated[PAGE_ID] = None
+        aggregated[PAGE_NUMBER] = None
+        aggregated[PARAGRAPH_ID] = None
+        aggregated[PARAGRAPH_NUMBER] = None
+        aggregated[CHAR_POSITION_START] = None
+        aggregated[CHAR_POSITION_END] = None
     
     # Filter out rows with no text and reset index
     log.info("Finalizing results")
@@ -326,7 +350,7 @@ def create_base_text_units(
 
 
 def create_attributes(metadata_str) -> dict:
-    """Create a simple attributes dictionary from metadata string."""
+    """Create attributes dictionary preserving primary structural information."""
     log.info("Creating attributes from metadata string")
     
     attributes = {}
@@ -350,49 +374,210 @@ def create_attributes(metadata_str) -> dict:
     except Exception as e:
         log.warning(f"Failed to log metadata structure: {e}")
     
-    # Create simplified structure with HTML info
+    # PRESERVE PRIMARY STRUCTURAL INFORMATION - DO NOT REMOVE
     if isinstance(metadata, dict) and "html" in metadata:
         html = metadata.get("html", {})
         if isinstance(html, dict):
-            # Log HTML structure keys
             log.debug(f"HTML metadata keys: {list(html.keys())}")
             
-            # Store basic HTML info - only primitive types
+            # Keep ALL HTML properties including pages and paragraphs
+            # These are PRIMARY structural attributes, not just metadata
             html_props = {}
             for key, value in html.items():
-                # Skip non-serializable values and large arrays
-                if key not in ["pages", "paragraphs"] and (isinstance(value, (str, int, float, bool)) or value is None):
+                if isinstance(value, (str, int, float, bool, type(None))):
                     html_props[key] = value
                     log.debug(f"Added HTML property {key}: {value}")
-                else:
-                    if key in ["pages", "paragraphs"]:
-                        log.debug(f"Skipping large array '{key}' with {len(value) if isinstance(value, list) else 'non-list'} elements")
+                elif key in ["pages", "paragraphs"]:
+                    # CRITICAL: Keep pages and paragraphs as they contain primary structural data
+                    if isinstance(value, list):
+                        # Preserve the structural information but ensure serializable format
+                        html_props[key] = value  # Keep the full list
+                        log.info(f"PRESERVED primary structural data '{key}' with {len(value)} elements")
                     else:
-                        log.debug(f"Skipping non-primitive HTML property {key}: {type(value)}")
+                        html_props[key] = value
+                        log.debug(f"Added non-list {key}: {type(value)}")
+                else:
+                    # For other complex objects, convert to string but preserve structure
+                    if isinstance(value, (dict, list)):
+                        html_props[key] = json.dumps(value) if value else None
+                        log.debug(f"Serialized complex HTML property {key}")
+                    else:
+                        html_props[key] = str(value) if value is not None else None
+                        log.debug(f"Converted HTML property {key} to string")
             
             attributes["html"] = html_props
     
-    # Include page, paragraph, and char_position if present
-    # Make sure we only keep primitive types that Parquet can handle
+    # PRESERVE page, paragraph, and char_position as PRIMARY attributes
     for key in ["page", "paragraph", "char_position"]:
         if key in metadata and metadata[key]:
-            log.debug(f"Processing {key} metadata: {metadata[key]}")
+            log.debug(f"Processing PRIMARY attribute {key}: {metadata[key]}")
             
-            # Convert dictionaries to flattened structures
             if isinstance(metadata[key], dict):
-                flat_data = {}
-                for subkey, subvalue in metadata[key].items():
-                    # Only keep primitive types
-                    if isinstance(subvalue, (str, int, float, bool)) or subvalue is None:
-                        flat_data[subkey] = subvalue
-                        log.debug(f"Added {key}.{subkey}: {subvalue}")
-                    else:
-                        log.debug(f"Skipping non-primitive {key}.{subkey}: {type(subvalue)}")
-                attributes[key] = flat_data
+                # Keep the full dictionary structure for primary attributes
+                attributes[key] = metadata[key]
+                log.info(f"PRESERVED primary attribute {key} with keys: {list(metadata[key].keys())}")
+            elif isinstance(metadata[key], (list, str, int, float, bool)):
+                # Keep primitive and list values as-is
+                attributes[key] = metadata[key]
+                log.info(f"PRESERVED primary attribute {key}: {type(metadata[key])}")
             else:
-                log.debug(f"Skipping non-dict {key}: {type(metadata[key])}")
+                # Convert complex objects to serializable format but preserve data
+                try:
+                    attributes[key] = json.loads(json.dumps(metadata[key])) if metadata[key] else None
+                    log.info(f"PRESERVED primary attribute {key} after serialization")
+                except (TypeError, ValueError):
+                    attributes[key] = str(metadata[key])
+                    log.warning(f"Converted primary attribute {key} to string due to serialization issues")
     
     # Log the final attributes structure
-    log.info(f"Final attributes created: {attributes}")
+    log.info(f"Final attributes created with PRIMARY structural data preserved: {list(attributes.keys())}")
     
     return attributes
+
+
+def extract_structural_columns(aggregated: pd.DataFrame) -> pd.DataFrame:
+    """Extract structural information to dedicated columns while preserving in attributes."""
+    log.info("Extracting structural information to dedicated columns")
+    
+    # Extract structural information from attributes for each row
+    def extract_row_structure(row):
+        try:
+            # Parse attributes if it's a string
+            attrs = row.get('attributes', '{}')
+            if isinstance(attrs, str):
+                try:
+                    attrs = json.loads(attrs)
+                except:
+                    attrs = {}
+            
+            # Extract page information
+            if 'page' in attrs and isinstance(attrs['page'], dict):
+                page_info = attrs['page']
+                row[PAGE_ID] = page_info.get('id') or page_info.get('page_id')
+                row[PAGE_NUMBER] = page_info.get('number') or page_info.get('page_num')
+                log.debug(f"Extracted page info: ID={row[PAGE_ID]}, Number={row[PAGE_NUMBER]}")
+            
+            # Extract paragraph information  
+            if 'paragraph' in attrs and isinstance(attrs['paragraph'], dict):
+                para_info = attrs['paragraph']
+                row[PARAGRAPH_ID] = para_info.get('id') or para_info.get('para_id')
+                row[PARAGRAPH_NUMBER] = para_info.get('number') or para_info.get('para_num')
+                log.debug(f"Extracted paragraph info: ID={row[PARAGRAPH_ID]}, Number={row[PARAGRAPH_NUMBER]}")
+            
+            # Extract character position information
+            if 'char_position' in attrs and isinstance(attrs['char_position'], dict):
+                char_info = attrs['char_position']
+                row[CHAR_POSITION_START] = char_info.get('start') or char_info.get('char_start')
+                row[CHAR_POSITION_END] = char_info.get('end') or char_info.get('char_end')
+                log.debug(f"Extracted char positions: Start={row[CHAR_POSITION_START]}, End={row[CHAR_POSITION_END]}")
+            
+            # Also check HTML structure for additional information
+            if 'html' in attrs and isinstance(attrs['html'], dict):
+                html_info = attrs['html']
+                
+                # Look for page/paragraph arrays to extract specific chunk positions
+                if 'pages' in html_info and isinstance(html_info['pages'], list):
+                    # Extract page information based on chunk content or position
+                    chunk_text = row.get('text', '')
+                    page_match = find_chunk_page_info(chunk_text, html_info['pages'])
+                    if page_match:
+                        row[PAGE_ID] = page_match.get('page_id')
+                        row[PAGE_NUMBER] = page_match.get('page_num')
+                        log.debug(f"Found page match from HTML: ID={page_match.get('page_id')}, Number={page_match.get('page_num')}")
+                
+                if 'paragraphs' in html_info and isinstance(html_info['paragraphs'], list):
+                    # Extract paragraph information based on chunk content or position
+                    chunk_text = row.get('text', '')
+                    para_match = find_chunk_paragraph_info(chunk_text, html_info['paragraphs'])
+                    if para_match:
+                        row[PARAGRAPH_ID] = para_match.get('para_id')
+                        row[PARAGRAPH_NUMBER] = para_match.get('para_num')
+                        row[CHAR_POSITION_START] = para_match.get('char_start')
+                        row[CHAR_POSITION_END] = para_match.get('char_end')
+                        log.debug(f"Found paragraph match from HTML: ID={para_match.get('para_id')}, Number={para_match.get('para_num')}")
+            
+        except Exception as e:
+            log.warning(f"Error extracting structural information from row: {e}")
+        
+        return row
+    
+    # Apply extraction to each row
+    log.info("Applying structural extraction to each row")
+    aggregated = aggregated.apply(extract_row_structure, axis=1)
+    
+    # Log summary of extracted information
+    structural_columns = [PAGE_ID, PAGE_NUMBER, PARAGRAPH_ID, PARAGRAPH_NUMBER, CHAR_POSITION_START, CHAR_POSITION_END]
+    for col in structural_columns:
+        non_null_count = aggregated[col].notna().sum()
+        log.info(f"Extracted {non_null_count} values for {col}")
+    
+    return aggregated
+
+
+def determine_chunk_position(chunk_text: str, html_meta: dict) -> dict:
+    """Determine the position of a chunk within the document structure."""
+    position_info = {}
+    
+    try:
+        # Try to match chunk text with paragraphs to determine position
+        if 'paragraphs' in html_meta and isinstance(html_meta['paragraphs'], list):
+            for para in html_meta['paragraphs']:
+                if isinstance(para, dict) and 'text' in para:
+                    # Check if chunk text matches or is contained in paragraph
+                    para_text = para['text']
+                    if chunk_text.strip() in para_text or para_text in chunk_text.strip():
+                        position_info['paragraph'] = {
+                            'para_id': para.get('para_id'),
+                            'para_num': para.get('para_num'),
+                            'char_start': para.get('char_start'),
+                            'char_end': para.get('char_end')
+                        }
+                        break
+        
+        # Try to determine page information
+        if 'pages' in html_meta and isinstance(html_meta['pages'], list):
+            # This would require more sophisticated logic to match chunks to pages
+            # For now, we'll rely on the extraction from other metadata
+            pass
+            
+    except Exception as e:
+        log.debug(f"Error determining chunk position: {e}")
+    
+    return position_info
+
+
+def find_chunk_page_info(chunk_text: str, pages: list) -> dict:
+    """Find page information for a chunk based on its text content."""
+    try:
+        for page in pages:
+            if isinstance(page, dict):
+                # Check if page has text content that matches
+                if 'text' in page and chunk_text.strip() in page['text']:
+                    return {
+                        'page_id': page.get('page_id'),
+                        'page_num': page.get('page_num')
+                    }
+    except Exception as e:
+        log.debug(f"Error finding page info: {e}")
+    
+    return {}
+
+
+def find_chunk_paragraph_info(chunk_text: str, paragraphs: list) -> dict:
+    """Find paragraph information for a chunk based on its text content."""
+    try:
+        for para in paragraphs:
+            if isinstance(para, dict) and 'text' in para:
+                # Check for exact or partial matches
+                para_text = para['text']
+                if chunk_text.strip() in para_text or para_text in chunk_text.strip():
+                    return {
+                        'para_id': para.get('para_id'),
+                        'para_num': para.get('para_num'),
+                        'char_start': para.get('char_start'),
+                        'char_end': para.get('char_end')
+                    }
+    except Exception as e:
+        log.debug(f"Error finding paragraph info: {e}")
+    
+    return {}
