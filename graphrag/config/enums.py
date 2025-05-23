@@ -38,6 +38,8 @@ class InputFileType(str, Enum):
     """The JSON input type."""
     html = "html"
     """The HTML input type for processing HTML and HTM files."""
+    pdf = "pdf"
+    """The PDF input type for processing PDF files."""
 
     def __repr__(self):
         """Get a string representation."""

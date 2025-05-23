@@ -21,6 +21,12 @@ from graphrag.query.context_builder.conversation_history import (
 )
 from graphrag.query.llm.text_utils import num_tokens
 from graphrag.query.structured_search.base import BaseSearch, SearchResult
+from graphrag.query.citation_utils import (
+    extract_citations_from_context,
+    extract_source_attributions,
+    create_citation_metadata,
+)
+from graphrag.query.document_registry import create_document_registry
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +44,7 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
         callbacks: list[QueryCallbacks] | None = None,
         model_params: dict[str, Any] | None = None,
         context_builder_params: dict | None = None,
+        storage: Any = None,  # For document registry
     ):
         super().__init__(
             model=model,
@@ -49,6 +56,8 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
         self.system_prompt = system_prompt or LOCAL_SEARCH_SYSTEM_PROMPT
         self.callbacks = callbacks or []
         self.response_type = response_type
+        self.storage = storage
+        self._document_registry = None
 
     async def search(
         self,
@@ -106,6 +115,23 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
             for callback in self.callbacks:
                 callback.on_context(context_result.context_records)
 
+            # Initialize document registry if needed
+            if self._document_registry is None and self.storage:
+                self._document_registry = await create_document_registry(self.storage)
+            
+            # Extract citation information from context records
+            citations = extract_citations_from_context(context_result.context_records)
+            
+            # Get document metadata for file path resolution
+            document_metadata = None
+            if self._document_registry:
+                document_metadata = self._document_registry._document_cache
+            
+            source_attributions = extract_source_attributions(
+                context_result.context_records, 
+                document_metadata
+            )
+
             return SearchResult(
                 response=full_response,
                 context_data=context_result.context_records,
@@ -117,49 +143,16 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
                 llm_calls_categories=llm_calls,
                 prompt_tokens_categories=prompt_tokens,
                 output_tokens_categories=output_tokens,
+                citations=citations,
+                source_attributions=source_attributions,
             )
 
         except Exception:
             log.exception("Exception in _asearch")
+            # Extract citations even for error cases if context was built
+            citations = extract_citations_from_context(context_result.context_records) if context_result else {}
+            source_attributions = extract_source_attributions(context_result.context_records) if context_result else []
+            
             return SearchResult(
                 response="",
-                context_data=context_result.context_records,
-                context_text=context_result.context_chunks,
-                completion_time=time.time() - start_time,
-                llm_calls=1,
-                prompt_tokens=num_tokens(search_prompt, self.token_encoder),
-                output_tokens=0,
-            )
-
-    async def stream_search(
-        self,
-        query: str,
-        conversation_history: ConversationHistory | None = None,
-    ) -> AsyncGenerator:
-        """Build local search context that fits a single context window and generate answer for the user query."""
-        start_time = time.time()
-
-        context_result = self.context_builder.build_context(
-            query=query,
-            conversation_history=conversation_history,
-            **self.context_builder_params,
-        )
-        log.info("GENERATE ANSWER: %s. QUERY: %s", start_time, query)
-        search_prompt = self.system_prompt.format(
-            context_data=context_result.context_chunks, response_type=self.response_type
-        )
-        history_messages = [
-            {"role": "system", "content": search_prompt},
-        ]
-
-        for callback in self.callbacks:
-            callback.on_context(context_result.context_records)
-
-        async for response in self.model.achat_stream(
-            prompt=query,
-            history=history_messages,
-            model_parameters=self.model_params,
-        ):
-            for callback in self.callbacks:
-                callback.on_llm_new_token(response)
-            yield response
+                context_data=c

@@ -565,6 +565,7 @@ def find_chunk_page_info(chunk_text: str, pages: list) -> dict:
 
 def find_chunk_paragraph_info(chunk_text: str, paragraphs: list) -> dict:
     """Find paragraph information for a chunk based on its text content."""
+    
     try:
         for para in paragraphs:
             if isinstance(para, dict) and 'text' in para:
@@ -580,4 +581,4 @@ def find_chunk_paragraph_info(chunk_text: str, paragraphs: list) -> dict:
     except Exception as e:
         log.debug(f"Error finding paragraph info: {e}")
     
-    return {}
+    retu

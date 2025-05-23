@@ -40,6 +40,9 @@ class SearchResult:
     llm_calls_categories: dict[str, int] | None = None
     prompt_tokens_categories: dict[str, int] | None = None
     output_tokens_categories: dict[str, int] | None = None
+    # Citation and source attribution information
+    citations: dict[str, list[str]] | None = None
+    source_attributions: list[dict[str, Any]] | None = None
 
 
 T = TypeVar(
@@ -85,7 +88,4 @@ class BaseSearch(ABC, Generic[T]):
         query: str,
         conversation_history: ConversationHistory | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream search for the given query."""
-        yield ""  # This makes it an async generator.
-        msg = "Subclasses must implement this method"
-        raise NotImplementedError(msg)
+        """Stream search for the giv

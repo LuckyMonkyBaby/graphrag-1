@@ -16,6 +16,7 @@ from graphrag.config.models.input_config import InputConfig
 from graphrag.index.input.csv import load_csv
 from graphrag.index.input.html import load_html  # Import the new HTML loader
 from graphrag.index.input.json import load_json
+from graphrag.index.input.pdf import load_pdf   # Import the new PDF loader
 from graphrag.index.input.text import load_text
 from graphrag.logger.base import ProgressLogger
 from graphrag.logger.null_progress import NullProgressLogger
@@ -28,6 +29,7 @@ loaders: dict[str, Callable[..., Awaitable[pd.DataFrame]]] = {
     InputFileType.csv: load_csv,
     InputFileType.json: load_json,
     InputFileType.html: load_html,  # Add HTML loader to the registry
+    InputFileType.pdf: load_pdf,    # Add PDF loader to the registry
 }
 
 

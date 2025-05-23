@@ -32,6 +32,10 @@ from graphrag.query.context_builder.conversation_history import (
 )
 from graphrag.query.llm.text_utils import num_tokens, try_parse_json_object
 from graphrag.query.structured_search.base import BaseSearch, SearchResult
+from graphrag.query.citation_utils import (
+    extract_citations_from_context,
+    extract_source_attributions,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +47,8 @@ class GlobalSearchResult(SearchResult):
     map_responses: list[SearchResult]
     reduce_context_data: str | list[pd.DataFrame] | dict[str, pd.DataFrame]
     reduce_context_text: str | list[str] | dict[str, str]
+    citations: dict[str, list[str]] | None = None
+    source_attributions: list[dict[str, Any]] | None = None
 
 
 class GlobalSearch(BaseSearch[GlobalContextBuilder]):
@@ -190,6 +196,10 @@ class GlobalSearch(BaseSearch[GlobalContextBuilder]):
         prompt_tokens["reduce"] = reduce_response.prompt_tokens
         output_tokens["reduce"] = reduce_response.output_tokens
 
+        # Extract citation information from context records
+        citations = extract_citations_from_context(context_result.context_records)
+        source_attributions = extract_source_attributions(context_result.context_records)
+
         return GlobalSearchResult(
             response=reduce_response.response,
             context_data=context_result.context_records,
@@ -204,6 +214,8 @@ class GlobalSearch(BaseSearch[GlobalContextBuilder]):
             llm_calls_categories=llm_calls,
             prompt_tokens_categories=prompt_tokens,
             output_tokens_categories=output_tokens,
+            citations=citations,
+            source_attributions=source_attributions,
         )
 
     async def _map_response_single_batch(
@@ -476,19 +488,4 @@ class GlobalSearch(BaseSearch[GlobalContextBuilder]):
         search_prompt = self.reduce_system_prompt.format(
             report_data=text_data,
             response_type=self.response_type,
-            max_length=max_length,
-        )
-        if self.allow_general_knowledge:
-            search_prompt += "\n" + self.general_knowledge_inclusion_prompt
-        search_messages = [
-            {"role": "system", "content": search_prompt},
-        ]
-
-        async for chunk_response in self.model.achat_stream(
-            prompt=query,
-            history=search_messages,
-            **llm_kwargs,
-        ):
-            for callback in self.callbacks:
-                callback.on_llm_new_token(chunk_response)
-            yield chunk_response
+          

@@ -182,4 +182,8 @@ DOCUMENTS_FINAL_COLUMNS = [
     TEXT_UNIT_IDS,
     CREATION_DATE,
     METADATA,
+    "file_path",        # Full path to source file
+    "file_size",        # Size of source file in bytes
+    "file_type",        # MIME type or file extension
+    "source_url",       # Original URL if from web source
 ]
