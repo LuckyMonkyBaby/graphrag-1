@@ -32,9 +32,14 @@ from graphrag.prompts.query.local_search_system_prompt import LOCAL_SEARCH_SYSTE
 from graphrag.prompts.query.question_gen_system_prompt import QUESTION_SYSTEM_PROMPT
 
 
-def initialize_project_at(path: Path, force: bool) -> None:
+def initialize_project_at(
+    path: Path, 
+    force: bool, 
+    preset: str = None, 
+    environment: str = None
+) -> None:
     """
-    Initialize the project at the given path.
+    Initialize the project at the given path with smart configuration.
 
     Parameters
     ----------
@@ -42,6 +47,10 @@ def initialize_project_at(path: Path, force: bool) -> None:
         The path at which to initialize the project.
     force : bool
         Whether to force initialization even if the project already exists.
+    preset : str, optional
+        Configuration preset to use (auto, dev_fast, enterprise_daily, etc.)
+    environment : str, optional
+        Target environment (development, production, enterprise)
 
     Raises
     ------
@@ -59,8 +68,33 @@ def initialize_project_at(path: Path, force: bool) -> None:
         msg = f"Project already initialized at {root}"
         raise ValueError(msg)
 
+    # Always start with the complete base configuration
     with settings_yaml.open("wb") as file:
         file.write(INIT_YAML.encode(encoding="utf-8", errors="strict"))
+
+    # Add smart optimizations if preset/environment specified
+    if preset or environment:
+        try:
+            from graphrag.config.auto_config import auto_generate_config
+            import yaml
+            
+            progress_logger.info("🤖 Enhancing configuration with smart optimizations...")
+            
+            # Load the base config we just wrote
+            with settings_yaml.open("r") as f:
+                base_config = yaml.safe_load(f)
+            
+            # Generate smart optimizations
+            smart_config = auto_generate_config(existing_config=base_config)
+            
+            # Write the enhanced configuration
+            with settings_yaml.open("w") as f:
+                yaml.dump(smart_config, f, default_flow_style=False, sort_keys=False)
+            
+            progress_logger.success(f"✅ Enhanced configuration with preset: {preset or 'auto'}")
+        except Exception as e:
+            progress_logger.warning(f"Failed to apply optimizations: {e}")
+            progress_logger.info("Using base configuration...")
 
     dotenv = root / ".env"
     if not dotenv.exists() or force:
