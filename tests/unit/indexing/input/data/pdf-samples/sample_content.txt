@@ -1,0 +1,24 @@
+# PDF Test Content Template
+# This file contains the text content that would be extracted from a sample PDF
+# Used for testing PDF parsing functionality
+
+Page 1 Content:
+Introduction
+
+This is the first paragraph of a sample PDF document. It contains basic text content that would be extracted by PDF parsing libraries.
+
+This is a second paragraph on the first page with additional content for testing paragraph extraction and character positioning.
+
+Page 2 Content:
+Main Section
+
+This paragraph appears on the second page and contains important information about the document structure.
+
+Another paragraph on page 2 with detailed content that spans multiple lines and contains various types of information.
+
+Page 3 Content:
+Conclusions
+
+This is the concluding paragraph on the final page that summarizes key points.
+
+Final paragraph with closing remarks and additional notes for comprehensive testing.
