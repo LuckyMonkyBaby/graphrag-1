@@ -223,8 +223,8 @@ def create_base_text_units(
                         }
                         
                         # Add chunk-specific positioning if we can determine it
-                        chunk_text = chunk[1] if len(chunk) > 1 else ""
-                        chunk_position = determine_chunk_position(chunk_text, html_meta)
+                        chunk_content = chunk[1] if len(chunk) > 1 else ""
+                        chunk_position = determine_chunk_position(chunk_content, html_meta)
                         if chunk_position:
                             chunk_meta.update(chunk_position)
                     
@@ -478,8 +478,8 @@ def extract_structural_columns(aggregated: pd.DataFrame) -> pd.DataFrame:
                 # Look for page/paragraph arrays to extract specific chunk positions
                 if 'pages' in html_info and isinstance(html_info['pages'], list):
                     # Extract page information based on chunk content or position
-                    chunk_text = row.get('text', '')
-                    page_match = find_chunk_page_info(chunk_text, html_info['pages'])
+                    chunk_content = row.get('text', '')
+                    page_match = find_chunk_page_info(chunk_content, html_info['pages'])
                     if page_match:
                         row[PAGE_ID] = page_match.get('page_id')
                         row[PAGE_NUMBER] = page_match.get('page_num')
@@ -487,8 +487,8 @@ def extract_structural_columns(aggregated: pd.DataFrame) -> pd.DataFrame:
                 
                 if 'paragraphs' in html_info and isinstance(html_info['paragraphs'], list):
                     # Extract paragraph information based on chunk content or position
-                    chunk_text = row.get('text', '')
-                    para_match = find_chunk_paragraph_info(chunk_text, html_info['paragraphs'])
+                    chunk_content = row.get('text', '')
+                    para_match = find_chunk_paragraph_info(chunk_content, html_info['paragraphs'])
                     if para_match:
                         row[PARAGRAPH_ID] = para_match.get('para_id')
                         row[PARAGRAPH_NUMBER] = para_match.get('para_num')

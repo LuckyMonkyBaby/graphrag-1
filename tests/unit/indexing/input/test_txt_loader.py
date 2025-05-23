@@ -14,7 +14,7 @@ async def test_txt_loader_one_file():
         base_dir="tests/unit/indexing/input/data/one-txt",
     )
     documents = await create_input(config=config)
-    assert documents.shape == (1, 4)
+    assert documents.shape == (1, 5)  # Updated to include metadata column
     assert documents["title"].iloc[0] == "input.txt"
 
 
@@ -40,4 +40,4 @@ async def test_txt_loader_multiple_files():
         base_dir="tests/unit/indexing/input/data/multiple-txts",
     )
     documents = await create_input(config=config)
-    assert documents.shape == (2, 4)
+    assert documents.shape == (2, 5)  # Updated to include metadata column
