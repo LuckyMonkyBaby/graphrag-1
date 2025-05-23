@@ -92,15 +92,42 @@ def _initialize_cli(
             ),
         ),
     ],
+    preset: Annotated[
+        str,
+        typer.Option(help="Configuration preset (dev_fast, enterprise_daily, hyperscale_batch, cost_optimized, or auto)"),
+    ] = "auto",
+    environment: Annotated[
+        str,
+        typer.Option(help="Target environment (development, production, enterprise)"),
+    ] = "auto",
     force: Annotated[
         bool,
         typer.Option(help="Force initialization even if the project already exists."),
     ] = False,
 ):
-    """Generate a default configuration file."""
+    """Generate an optimized configuration file with smart presets."""
     from graphrag.cli.initialize import initialize_project_at
+    from graphrag.config.auto_config import init_config_with_presets
 
+    # Create the project structure first
     initialize_project_at(path=root, force=force)
+    
+    # Generate optimized configuration
+    if preset == "auto" and environment == "auto":
+        print("🤖 Auto-detecting optimal configuration...")
+        config = init_config_with_presets(output_file=root / "settings.yaml")
+    else:
+        preset_to_use = None if preset == "auto" else preset
+        env_to_use = None if environment == "auto" else environment
+        config = init_config_with_presets(
+            preset=preset_to_use,
+            environment=env_to_use,
+            output_file=root / "settings.yaml"
+        )
+    
+    print(f"📁 Project initialized at: {root}")
+    print(f"⚙️  Configuration: {preset} preset, {environment} environment")
+    print("🚀 Ready to run: graphrag index")
 
 
 @app.command("index")

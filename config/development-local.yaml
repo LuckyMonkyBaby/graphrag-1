@@ -93,6 +93,13 @@ chunks:
   # Citation preservation settings
   prepend_metadata: false
   chunk_size_includes_metadata: false
+  
+  # Performance optimization settings
+  batch_size: 50          # Smaller batches for development
+  max_workers: 4          # Limit workers for dev machines
+  enable_parallel: true   # Enable parallel processing
+  parallel_threshold: 10  # Lower threshold for dev testing
+  metadata_cache_size: 500 # Smaller cache for dev
 
 # ============================================================================
 # LANGUAGE MODEL CONFIGURATION

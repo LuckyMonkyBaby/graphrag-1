@@ -1,0 +1,206 @@
+# Copyright (c) 2024 Microsoft Corporation.
+# Licensed under the MIT License
+
+"""Automatic configuration detection and optimization."""
+
+import os
+import logging
+from pathlib import Path
+from typing import Dict, Any, Optional
+import yaml
+
+from graphrag.config.presets import (
+    detect_system_resources,
+    estimate_deployment_scale,
+    create_enterprise_daily_config,
+    validate_and_optimize_config,
+    get_preset_config
+)
+
+log = logging.getLogger(__name__)
+
+
+def detect_deployment_context() -> Dict[str, Any]:
+    """Auto-detect deployment context and requirements."""
+    
+    context = {
+        "environment": "development",
+        "scale": "small",
+        "daily_updates": False,
+        "high_availability": False,
+        "document_count_estimate": 1000,
+    }
+    
+    # Detect environment from environment variables
+    if os.getenv("GRAPHRAG_ENV") == "production":
+        context["environment"] = "production"
+        context["high_availability"] = True
+        context["daily_updates"] = True
+        context["document_count_estimate"] = 100000
+        
+    elif os.getenv("GRAPHRAG_ENV") == "enterprise":
+        context["environment"] = "enterprise"
+        context["high_availability"] = True
+        context["daily_updates"] = True
+        context["document_count_estimate"] = 1000000
+        
+    # Detect scale from input directory size (if available)
+    input_dir = os.getenv("GRAPHRAG_INPUT_DIR")
+    if input_dir and Path(input_dir).exists():
+        try:
+            file_count = sum(1 for _ in Path(input_dir).rglob("*.*"))
+            context["document_count_estimate"] = file_count
+            context["scale"] = estimate_deployment_scale(file_count).value
+        except Exception as e:
+            log.warning(f"Could not estimate document count: {e}")
+    
+    # Detect daily updates from environment
+    if os.getenv("GRAPHRAG_DAILY_UPDATES", "").lower() in ("true", "1", "yes"):
+        context["daily_updates"] = True
+        
+    # Detect high availability requirements
+    if os.getenv("GRAPHRAG_HIGH_AVAILABILITY", "").lower() in ("true", "1", "yes"):
+        context["high_availability"] = True
+    
+    log.info(f"Detected deployment context: {context}")
+    return context
+
+
+def auto_generate_config(
+    existing_config: Optional[Dict[str, Any]] = None,
+    force_preset: Optional[str] = None
+) -> Dict[str, Any]:
+    """Auto-generate optimized configuration based on environment."""
+    
+    if force_preset:
+        log.info(f"Using forced preset: {force_preset}")
+        return get_preset_config(force_preset)
+    
+    context = detect_deployment_context()
+    
+    # Choose configuration strategy based on context
+    if context["environment"] == "enterprise":
+        config = {
+            "chunks": create_enterprise_daily_config(
+                document_count_estimate=context["document_count_estimate"],
+                target_update_hours=6,
+                high_availability=context["high_availability"]
+            )
+        }
+        log.info("Generated enterprise daily update configuration")
+        
+    elif context["daily_updates"]:
+        from graphrag.config.presets import ConfigurationPresets, DeploymentScale
+        
+        resources = detect_system_resources()
+        scale = DeploymentScale(context["scale"])
+        
+        config = {
+            "chunks": ConfigurationPresets.get_daily_update_config(scale, resources)
+        }
+        log.info(f"Generated daily update configuration for {scale.value} scale")
+        
+    elif context["environment"] == "development":
+        config = get_preset_config("dev_fast")
+        log.info("Using development configuration")
+        
+    else:
+        # Default production configuration
+        from graphrag.config.presets import ConfigurationPresets, DeploymentScale
+        
+        resources = detect_system_resources()
+        scale = DeploymentScale(context["scale"])
+        
+        config = {
+            "chunks": ConfigurationPresets.get_chunking_config(
+                scale, resources, daily_update=context["daily_updates"]
+            )
+        }
+        log.info(f"Generated standard configuration for {scale.value} scale")
+    
+    # Merge with existing config if provided
+    if existing_config:
+        # Deep merge configurations
+        merged_config = existing_config.copy()
+        if "chunks" in config:
+            existing_chunks = merged_config.get("chunks", {})
+            merged_config["chunks"] = {**existing_chunks, **config["chunks"]}
+        config = merged_config
+    
+    # Validate and optimize
+    return validate_and_optimize_config(config)
+
+
+def save_optimized_config(
+    config: Dict[str, Any],
+    output_path: str = "optimized_settings.yaml"
+) -> None:
+    """Save optimized configuration to file."""
+    
+    # Add metadata
+    config_with_meta = {
+        "# Auto-generated optimized configuration": None,
+        "# Generated by GraphRAG Auto-Config": None,
+        **config
+    }
+    
+    with open(output_path, "w") as f:
+        yaml.dump(
+            config_with_meta,
+            f,
+            default_flow_style=False,
+            sort_keys=False,
+            allow_unicode=True
+        )
+    
+    log.info(f"Saved optimized configuration to {output_path}")
+
+
+def get_smart_defaults() -> Dict[str, Any]:
+    """Get smart defaults that work well for most scenarios."""
+    
+    # This is a "good enough" configuration that works for 80% of use cases
+    return {
+        "chunks": {
+            "size": 1200,
+            "overlap": 200,
+            "strategy": "tokens",
+            "encoding_model": "cl100k_base",
+            "batch_size": 100,
+            "max_workers": 8,
+            "enable_parallel": True,
+            "parallel_threshold": 20,
+            "metadata_cache_size": 1000,
+            "enable_checkpointing": True,
+            "enable_performance_metrics": True,
+            "error_recovery_strategy": "retry",
+            "max_errors_per_batch": 5,
+        }
+    }
+
+
+# CLI integration functions
+def init_config_with_presets(
+    preset: Optional[str] = None,
+    environment: Optional[str] = None,
+    output_file: str = "settings.yaml"
+) -> Dict[str, Any]:
+    """Initialize configuration with smart presets."""
+    
+    if preset:
+        config = get_preset_config(preset)
+    else:
+        # Set environment for auto-detection
+        if environment:
+            os.environ["GRAPHRAG_ENV"] = environment
+            
+        config = auto_generate_config()
+    
+    # Save to file
+    save_optimized_config(config, output_file)
+    
+    print(f"✅ Created optimized configuration: {output_file}")
+    print(f"🔧 Preset: {preset or 'auto-detected'}")
+    print(f"🚀 Ready for: {environment or 'auto-detected environment'}")
+    
+    return config

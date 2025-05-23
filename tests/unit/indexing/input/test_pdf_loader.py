@@ -1,15 +1,15 @@
 # Copyright (c) 2024 Microsoft Corporation.
 # Licensed under the MIT License
 
-import json
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
 import io
+import json
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 from graphrag.config.enums import InputFileType, InputType
 from graphrag.config.models.input_config import InputConfig
 from graphrag.index.input.factory import create_input
-
 
 # Mock PDF content for testing
 MOCK_PDF_CONTENT = {

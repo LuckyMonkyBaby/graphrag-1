@@ -15,18 +15,18 @@ from graphrag.language_model.protocol.base import ChatModel
 from graphrag.prompts.query.local_search_system_prompt import (
     LOCAL_SEARCH_SYSTEM_PROMPT,
 )
+from graphrag.query.citation_utils import (
+    create_citation_metadata,
+    extract_citations_from_context,
+    extract_source_attributions,
+)
 from graphrag.query.context_builder.builders import LocalContextBuilder
 from graphrag.query.context_builder.conversation_history import (
     ConversationHistory,
 )
+from graphrag.query.document_registry import create_document_registry
 from graphrag.query.llm.text_utils import num_tokens
 from graphrag.query.structured_search.base import BaseSearch, SearchResult
-from graphrag.query.citation_utils import (
-    extract_citations_from_context,
-    extract_source_attributions,
-    create_citation_metadata,
-)
-from graphrag.query.document_registry import create_document_registry
 
 log = logging.getLogger(__name__)
 
@@ -118,18 +118,17 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
             # Initialize document registry if needed
             if self._document_registry is None and self.storage:
                 self._document_registry = await create_document_registry(self.storage)
-            
+
             # Extract citation information from context records
             citations = extract_citations_from_context(context_result.context_records)
-            
+
             # Get document metadata for file path resolution
             document_metadata = None
             if self._document_registry:
                 document_metadata = self._document_registry._document_cache
-            
+
             source_attributions = extract_source_attributions(
-                context_result.context_records, 
-                document_metadata
+                context_result.context_records, document_metadata
             )
 
             return SearchResult(
@@ -150,9 +149,17 @@ class LocalSearch(BaseSearch[LocalContextBuilder]):
         except Exception:
             log.exception("Exception in _asearch")
             # Extract citations even for error cases if context was built
-            citations = extract_citations_from_context(context_result.context_records) if context_result else {}
-            source_attributions = extract_source_attributions(context_result.context_records) if context_result else []
-            
+            citations = (
+                extract_citations_from_context(context_result.context_records)
+                if context_result
+                else {}
+            )
+            source_attributions = (
+                extract_source_attributions(context_result.context_records)
+                if context_result
+                else []
+            )
+
             return SearchResult(
                 response="",
                 context_data=context_result.context_records,

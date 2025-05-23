@@ -81,11 +81,14 @@ class FilePipelineStorage(PipelineStorage):
                 progress(_create_progress_status(num_loaded, num_filtered, num_total))
 
     async def get(
-        self, key: str, as_bytes: bool | None = False, encoding: str | None = None, 
-        binary: bool | None = None  # Added for backward compatibility
+        self,
+        key: str,
+        as_bytes: bool | None = False,
+        encoding: str | None = None,
+        binary: bool | None = None,  # Added for backward compatibility
     ) -> Any:
         """Get method definition.
-        
+
         Args:
             key: The key to get the value for
             as_bytes: Whether to return the content as bytes
@@ -95,7 +98,7 @@ class FilePipelineStorage(PipelineStorage):
         # For backward compatibility, if binary is specified, use it for as_bytes
         if binary is not None:
             as_bytes = binary
-            
+
         file_path = join_path(self._root_dir, key)
 
         if await self.has(key):

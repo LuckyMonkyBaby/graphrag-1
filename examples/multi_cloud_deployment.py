@@ -11,18 +11,18 @@ import os
 from pathlib import Path
 
 from graphrag.config.models.cloud_config import (
-    AWSConfig,
-    AzureConfig,
-    CloudStorageConfig,
-    CloudProvider,
-    StorageBackend,
-    VectorStoreBackend,
-    GraphStoreBackend,
-    LanceDBConfig,
     AWS_PROFILE,
     AZURE_PROFILE,
-    LOCAL_LANCEDB_PROFILE,
     HYBRID_AWS_LANCEDB_PROFILE,
+    LOCAL_LANCEDB_PROFILE,
+    AWSConfig,
+    AzureConfig,
+    CloudProvider,
+    CloudStorageConfig,
+    GraphStoreBackend,
+    LanceDBConfig,
+    StorageBackend,
+    VectorStoreBackend,
 )
 from graphrag.storage.cloud_factory import CloudStorageFactory, MultiCloudOrchestrator
 
@@ -31,7 +31,7 @@ async def demonstrate_aws_deployment():
     """Demonstrate full AWS deployment configuration."""
     print("☁️ AWS Deployment Configuration")
     print("=" * 40)
-    
+
     # AWS configuration with all services
     aws_config = CloudStorageConfig(
         provider=CloudProvider.AWS,
@@ -55,7 +55,7 @@ async def demonstrate_aws_deployment():
         encryption_at_rest=True,
         backup_enabled=True,
     )
-    
+
     print("📋 AWS Configuration:")
     print(f"  📄 Documents: {aws_config.document_storage} (S3)")
     print(f"  📊 Metadata: {aws_config.metadata_storage} (RDS PostgreSQL)")
@@ -63,13 +63,13 @@ async def demonstrate_aws_deployment():
     print(f"  🕸️ Graph: {aws_config.graph_storage} (Neptune)")
     print(f"  🌍 Region: {aws_config.aws.region}")
     print(f"  🪣 S3 Bucket: {aws_config.aws.s3_bucket}")
-    
+
     print("\n💰 AWS Cost Optimization:")
     print("  🌡️ S3 Intelligent Tiering for document storage")
     print("  ⚡ OpenSearch reserved instances for vectors")
     print("  🔄 Neptune auto-scaling for graph queries")
     print("  📊 RDS read replicas for metadata queries")
-    
+
     return aws_config
 
 
@@ -77,14 +77,14 @@ async def demonstrate_aws_lancedb_hybrid():
     """Demonstrate AWS with LanceDB hybrid deployment."""
     print("\n🔗 AWS + LanceDB Hybrid Deployment")
     print("=" * 40)
-    
+
     # Hybrid configuration: AWS infrastructure with LanceDB for vectors
     hybrid_config = CloudStorageConfig(
         provider=CloudProvider.AWS,
         document_storage=StorageBackend.S3,
         metadata_storage=StorageBackend.RDS,
         vector_storage=VectorStoreBackend.LANCEDB,  # LanceDB with S3 backend
-        graph_storage=GraphStoreBackend.NEO4J,      # Self-hosted Neo4j cluster
+        graph_storage=GraphStoreBackend.NEO4J,  # Self-hosted Neo4j cluster
         aws=AWSConfig(
             region="us-west-2",
             s3_bucket="graphrag-hybrid-storage",
@@ -105,20 +105,20 @@ async def demonstrate_aws_lancedb_hybrid():
             embeddings_table="raw_embeddings",
         ),
     )
-    
+
     print("📋 Hybrid Configuration:")
     print(f"  📄 Documents: AWS S3 ({hybrid_config.aws.s3_bucket})")
     print(f"  📊 Metadata: AWS RDS PostgreSQL")
     print(f"  🔍 Vectors: LanceDB on S3 ({hybrid_config.lancedb.s3_bucket})")
     print(f"  🕸️ Graph: Self-hosted Neo4j cluster")
-    
+
     print("\n✅ Hybrid Benefits:")
     print("  💰 60% cost reduction vs. managed vector services")
     print("  ⚡ 10x faster vector operations with LanceDB")
     print("  📈 Better control over vector indexing strategies")
     print("  🔧 Easy scaling with S3 backend storage")
     print("  🧠 Support for latest vector index algorithms")
-    
+
     return hybrid_config
 
 
@@ -126,7 +126,7 @@ async def demonstrate_local_lancedb():
     """Demonstrate local LanceDB deployment for development."""
     print("\n💻 Local LanceDB Development Setup")
     print("=" * 35)
-    
+
     # Local development configuration
     local_config = CloudStorageConfig(
         provider=CloudProvider.LOCAL,
@@ -146,20 +146,20 @@ async def demonstrate_local_lancedb():
             embeddings_table="embeddings",
         ),
     )
-    
+
     print("📋 Local Configuration:")
     print(f"  📄 Documents: Local filesystem (./documents)")
     print(f"  📊 Metadata: SQLite (./graphrag.db)")
     print(f"  🔍 Vectors: LanceDB (./data/lancedb)")
     print(f"  🕸️ Graph: NetworkX (in-memory)")
-    
+
     print("\n🚀 Development Benefits:")
     print("  🔧 No cloud dependencies for development")
     print("  💰 Zero cloud costs during development")
     print("  ⚡ Fast iteration and testing")
     print("  📦 Easy Docker containerization")
     print("  🎯 Perfect for CI/CD testing pipelines")
-    
+
     return local_config
 
 
@@ -167,7 +167,7 @@ async def demonstrate_azure_deployment():
     """Demonstrate Azure deployment configuration."""
     print("\n☁️ Azure Deployment Configuration")
     print("=" * 35)
-    
+
     # Azure configuration
     azure_config = CloudStorageConfig(
         provider=CloudProvider.AZURE,
@@ -186,19 +186,19 @@ async def demonstrate_azure_deployment():
             search_index_prefix="graphrag_",
         ),
     )
-    
+
     print("📋 Azure Configuration:")
     print(f"  📄 Documents: Azure Blob Storage")
     print(f"  📊 Metadata: Cosmos DB (SQL API)")
     print(f"  🔍 Vectors: Azure AI Search")
     print(f"  🕸️ Graph: Cosmos DB (Gremlin API)")
-    
+
     print("\n💡 Azure Benefits:")
     print("  🔒 Native Azure AD integration")
     print("  📊 Built-in monitoring with Azure Monitor")
     print("  ⚖️ Auto-scaling for all services")
     print("  🛡️ Enterprise security compliance")
-    
+
     return azure_config
 
 
@@ -206,7 +206,7 @@ async def demonstrate_multi_cloud_orchestration():
     """Demonstrate multi-cloud orchestration with failover."""
     print("\n🌐 Multi-Cloud Orchestration")
     print("=" * 30)
-    
+
     # Primary AWS configuration
     primary_config = CloudStorageConfig(
         provider=CloudProvider.AWS,
@@ -221,27 +221,27 @@ async def demonstrate_multi_cloud_orchestration():
             s3_region="us-east-1",
         ),
     )
-    
+
     print("🎯 Multi-Cloud Strategy:")
     print("  🏢 Primary: AWS US-East-1 (80% traffic)")
     print("  🔄 Failover: Azure West-Europe (automatic)")
     print("  📊 Backup: AWS US-West-2 (daily sync)")
     print("  🌍 Edge: CloudFlare CDN (global)")
-    
+
     print("\n⚡ Performance Optimizations:")
     print("  📍 Geo-routing to nearest region")
     print("  💾 Multi-tier caching (Redis + CDN)")
     print("  🔄 Async replication between regions")
     print("  📈 Auto-scaling based on load")
-    
+
     # Initialize orchestrator
     orchestrator = MultiCloudOrchestrator(primary_config)
     await orchestrator.initialize()
-    
+
     # Health check
     health = await orchestrator.health_check()
     print(f"\n💚 Health Status: {health}")
-    
+
     return orchestrator
 
 
@@ -249,7 +249,7 @@ async def demonstrate_configuration_examples():
     """Show different configuration file examples."""
     print("\n📄 Configuration File Examples")
     print("=" * 35)
-    
+
     # AWS YAML configuration
     aws_yaml = """
 # graphrag-aws.yaml
@@ -276,7 +276,7 @@ cloud_storage:
   enable_compression: true
   encryption_at_rest: true
 """
-    
+
     # Local YAML configuration
     local_yaml = """
 # graphrag-local.yaml
@@ -292,7 +292,7 @@ cloud_storage:
     index_type: IVF_PQ
     num_partitions: 128
 """
-    
+
     # Docker Compose example
     docker_compose = """
 # docker-compose.yml
@@ -324,7 +324,7 @@ services:
 volumes:
   neo4j_data:
 """
-    
+
     print("📝 AWS Configuration (graphrag-aws.yaml):")
     print(aws_yaml)
     print("\n📝 Local Configuration (graphrag-local.yaml):")
@@ -337,7 +337,7 @@ async def demonstrate_performance_benchmarks():
     """Show performance benchmarks for different configurations."""
     print("\n📊 Performance Benchmarks")
     print("=" * 30)
-    
+
     benchmarks = {
         "AWS OpenSearch": {
             "vector_search_latency": "25ms",
@@ -347,7 +347,7 @@ async def demonstrate_performance_benchmarks():
         },
         "AWS + LanceDB": {
             "vector_search_latency": "8ms",
-            "indexing_throughput": "15K docs/hour", 
+            "indexing_throughput": "15K docs/hour",
             "cost_per_million_vectors": "$12/month",
             "scalability": "Manual scaling to 1B+ vectors",
         },
@@ -358,13 +358,13 @@ async def demonstrate_performance_benchmarks():
             "scalability": "Limited by local storage",
         },
         "Azure AI Search": {
-            "vector_search_latency": "30ms", 
+            "vector_search_latency": "30ms",
             "indexing_throughput": "4K docs/hour",
             "cost_per_million_vectors": "$75/month",
             "scalability": "Auto-scaling to 50M+ vectors",
-        }
+        },
     }
-    
+
     print("⚡ Vector Search Performance:")
     for config, metrics in benchmarks.items():
         print(f"\n{config}:")
@@ -376,28 +376,28 @@ async def main():
     """Run all multi-cloud deployment demonstrations."""
     print("🌐 GraphRAG Multi-Cloud Deployment Guide")
     print("=" * 50)
-    
+
     # AWS deployment
     aws_config = await demonstrate_aws_deployment()
-    
+
     # AWS + LanceDB hybrid
     hybrid_config = await demonstrate_aws_lancedb_hybrid()
-    
+
     # Local development
     local_config = await demonstrate_local_lancedb()
-    
+
     # Azure deployment
     azure_config = await demonstrate_azure_deployment()
-    
+
     # Multi-cloud orchestration
     orchestrator = await demonstrate_multi_cloud_orchestration()
-    
+
     # Configuration examples
     await demonstrate_configuration_examples()
-    
+
     # Performance benchmarks
     await demonstrate_performance_benchmarks()
-    
+
     print("\n🎉 Multi-Cloud Deployment Guide Complete!")
     print("\nKey Takeaways:")
     print("  ☁️ Choose cloud provider based on existing infrastructure")

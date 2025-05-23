@@ -1,0 +1,199 @@
+# GraphRAG Enterprise Daily Update Configuration
+# Optimized for daily graph updates with Google-scale reliability
+
+# ============================================================================
+# CHUNKING CONFIGURATION - OPTIMIZED FOR DAILY UPDATES
+# ============================================================================
+chunks:
+  size: 1200                    # Optimal for enterprise document complexity
+  overlap: 200                  # Good context preservation
+  group_by_columns: [id]
+  strategy: tokens
+  encoding_model: cl100k_base
+  
+  # Citation and metadata
+  prepend_metadata: false       # Disable to reduce processing overhead
+  chunk_size_includes_metadata: false
+  
+  # Enterprise performance settings
+  batch_size: 200               # Optimized for daily update throughput
+  max_workers: 16               # Scale with available CPU cores
+  enable_parallel: true
+  parallel_threshold: 10        # Aggressive parallel processing
+  metadata_cache_size: 2000     # Large cache for performance
+  
+  # Enterprise resilience features
+  enable_checkpointing: true    # Critical for resumable daily updates
+  checkpoint_frequency: 5       # Frequent checkpoints for safety
+  enable_progress_persistence: true
+  
+  # Quality assurance
+  enable_quality_checks: true
+  min_chunk_size: 100           # Higher threshold for enterprise content
+  max_empty_chunks_ratio: 0.05  # Strict quality control
+  
+  # Resource management
+  memory_limit_gb: 32           # Conservative memory limit
+  enable_memory_monitoring: true
+  gc_frequency: 20              # Frequent garbage collection
+  
+  # Error handling for production
+  max_errors_per_batch: 3       # Low tolerance for errors
+  error_recovery_strategy: "retry"
+  
+  # Performance monitoring
+  enable_performance_metrics: true
+  metrics_collection_interval: 15
+
+# ============================================================================
+# INPUT CONFIGURATION - ENTERPRISE SCALE
+# ============================================================================
+input:
+  type: file
+  file_type: text
+  base_dir: ./input
+  encoding: utf-8
+  file_pattern: "**/*.*"
+  
+  # Enterprise metadata
+  metadata:
+    - source_system
+    - document_category
+    - business_unit
+    - last_modified_by
+
+# ============================================================================
+# OUTPUT CONFIGURATION - OPTIMIZED STORAGE
+# ============================================================================
+output:
+  type: file
+  base_dir: ./output
+  
+  # Optimized parquet settings
+  parquet:
+    row_group_size: 1000000
+    compression: zstd
+    use_dictionary: true
+
+# ============================================================================
+# LANGUAGE MODEL CONFIGURATION - HIGH THROUGHPUT
+# ============================================================================
+llm:
+  type: openai_chat
+  model: gpt-4o
+  api_key: ${OPENAI_API_KEY}
+  
+  # Enterprise performance
+  max_tokens: 4000
+  temperature: 0.1              # Low for consistency
+  
+  # High-throughput settings
+  requests_per_minute: 1000     # Enterprise tier
+  concurrent_requests: 20       # Aggressive parallelism
+  max_retries: 10               # Robust retry logic
+
+# ============================================================================
+# EMBEDDINGS CONFIGURATION - ENTERPRISE SCALE
+# ============================================================================
+embeddings:
+  llm:
+    type: openai_embedding
+    model: text-embedding-3-large
+    api_key: ${OPENAI_API_KEY}
+    
+    # High-throughput settings
+    batch_size: 1000
+    concurrent_requests: 10
+    max_retries: 10
+
+# ============================================================================
+# CACHE CONFIGURATION - ENTERPRISE PERFORMANCE
+# ============================================================================
+cache:
+  type: file
+  base_dir: ./cache
+  
+  # Large cache for enterprise performance
+  llm_cache_max_entries: 20000
+  embedding_cache_max_entries: 100000
+
+# ============================================================================
+# ENTITY EXTRACTION - ENTERPRISE PRECISION
+# ============================================================================
+entity_extraction:
+  llm:
+    type: openai_chat
+    model: gpt-4o
+    max_tokens: 3000
+    temperature: 0.0            # Maximum consistency
+  
+  max_gleanings: 2              # Balanced quality vs speed
+  
+  # Enterprise entity types
+  entity_types: [
+    person, organization, location, event, concept, technology,
+    product, service, regulation, policy, department, role
+  ]
+
+# ============================================================================
+# GRAPH CLUSTERING - ENTERPRISE COMMUNITIES
+# ============================================================================
+cluster_graph:
+  max_cluster_size: 30          # Optimal for enterprise use
+  strategy:
+    type: leiden
+    max_cluster_size: 30
+    use_lcc: true
+    seed: 0xDEADBEEF
+    resolution: 1.0
+
+# ============================================================================
+# COMMUNITY REPORTS - EXECUTIVE SUMMARIES
+# ============================================================================
+summarize_descriptions:
+  llm:
+    type: openai_chat
+    model: gpt-4o
+    max_tokens: 4000            # Comprehensive summaries
+    temperature: 0.1
+  
+  max_length: 2000              # Executive-friendly length
+
+# ============================================================================
+# SEARCH CONFIGURATION - ENTERPRISE FEATURES
+# ============================================================================
+local_search:
+  text_unit_prop: 0.7
+  community_prop: 0.2
+  conversation_history_max_turns: 5
+  top_k_mapped_entities: 15
+  top_k_relationships: 15
+  max_tokens: 12000
+
+global_search:
+  max_tokens: 16000
+  data_max_tokens: 12000
+  map_max_tokens: 1500
+  reduce_max_tokens: 3000
+  concurrency: 32               # High parallelism for enterprise
+
+# ============================================================================
+# ENTERPRISE MONITORING (Optional - requires external setup)
+# ============================================================================
+# monitoring:
+#   enable_metrics: true
+#   metrics_port: 9090
+#   enable_tracing: true
+#   log_level: INFO
+#   enable_structured_logging: true
+
+# ============================================================================
+# PERFORMANCE TARGETS - ENTERPRISE SLA
+# ============================================================================
+# Enterprise SLA targets (for monitoring/alerting)
+# sla_targets:
+#   indexing_throughput_docs_per_hour: 25000
+#   indexing_latency_p99_seconds: 180
+#   search_latency_p95_ms: 500
+#   search_latency_p99_ms: 1000
+#   uptime_percentage: 99.9

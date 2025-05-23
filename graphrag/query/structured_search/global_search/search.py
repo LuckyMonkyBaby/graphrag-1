@@ -26,16 +26,16 @@ from graphrag.prompts.query.global_search_reduce_system_prompt import (
     NO_DATA_ANSWER,
     REDUCE_SYSTEM_PROMPT,
 )
+from graphrag.query.citation_utils import (
+    extract_citations_from_context,
+    extract_source_attributions,
+)
 from graphrag.query.context_builder.builders import GlobalContextBuilder
 from graphrag.query.context_builder.conversation_history import (
     ConversationHistory,
 )
 from graphrag.query.llm.text_utils import num_tokens, try_parse_json_object
 from graphrag.query.structured_search.base import BaseSearch, SearchResult
-from graphrag.query.citation_utils import (
-    extract_citations_from_context,
-    extract_source_attributions,
-)
 
 log = logging.getLogger(__name__)
 
@@ -198,7 +198,9 @@ class GlobalSearch(BaseSearch[GlobalContextBuilder]):
 
         # Extract citation information from context records
         citations = extract_citations_from_context(context_result.context_records)
-        source_attributions = extract_source_attributions(context_result.context_records)
+        source_attributions = extract_source_attributions(
+            context_result.context_records
+        )
 
         return GlobalSearchResult(
             response=reduce_response.response,

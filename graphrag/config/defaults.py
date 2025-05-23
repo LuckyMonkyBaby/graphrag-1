@@ -74,6 +74,28 @@ class ChunksDefaults:
     encoding_model: str = "cl100k_base"
     prepend_metadata: bool = False
     chunk_size_includes_metadata: bool = False
+    
+    # Performance optimization settings
+    batch_size: int = 100
+    max_workers: int = 8  # Will be min(8, cpu_count()) in config
+    enable_parallel: bool = True
+    parallel_threshold: int = 20
+    metadata_cache_size: int = 1000
+    
+    # Enterprise resilience settings (conservative defaults)
+    enable_checkpointing: bool = True
+    checkpoint_frequency: int = 10
+    enable_progress_persistence: bool = True
+    enable_quality_checks: bool = True
+    min_chunk_size: int = 50
+    max_empty_chunks_ratio: float = 0.1
+    memory_limit_gb: None = None  # No limit by default
+    enable_memory_monitoring: bool = True
+    gc_frequency: int = 50
+    max_errors_per_batch: int = 5
+    error_recovery_strategy: str = "retry"
+    enable_performance_metrics: bool = True
+    metrics_collection_interval: int = 30
 
 
 @dataclass

@@ -115,6 +115,13 @@ chunks:
   # Citation preservation settings
   prepend_metadata: false
   chunk_size_includes_metadata: false
+  
+  # Performance optimization settings for production
+  batch_size: 100         # Optimal batch size for production
+  max_workers: 8          # Maximum parallelism
+  enable_parallel: true   # Enable parallel processing
+  parallel_threshold: 20  # Threshold for parallel processing
+  metadata_cache_size: 2000 # Larger cache for production
 
 # ============================================================================
 # LANGUAGE MODEL CONFIGURATION

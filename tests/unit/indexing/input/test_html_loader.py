@@ -2,6 +2,7 @@
 # Licensed under the MIT License
 
 import json
+
 import pytest
 
 from graphrag.config.enums import InputFileType, InputType
