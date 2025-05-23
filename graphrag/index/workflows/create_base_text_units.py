@@ -1,3 +1,8 @@
+# Copyright (c) 2024 Microsoft Corporation.
+# Licensed under the MIT License
+
+"""A module containing run_workflow method definition."""
+
 import json
 import logging
 import multiprocessing as mp
@@ -218,29 +223,30 @@ def create_base_text_units(
         else:
             metadata_tokens = 0
 
-        # Efficient chunking without DataFrame overhead
-        chunked = chunk_text_optimized(
+        # Enhanced chunking that tracks character positions
+        chunked = chunk_text_with_positions(
             row["texts"],
             size - metadata_tokens,
             overlap,
             strategy,
             encode_fn,
             decode_fn,
+            row.get("metadata")  # Pass metadata for position tracking
         )
 
         # Prepend metadata if needed
         if prepend_metadata:
             for index, chunk in enumerate(chunked):
-                if isinstance(chunk, str):
-                    chunked[index] = metadata_str + chunk
-                else:
+                if isinstance(chunk, dict):
+                    # Handle new chunk format with positions
+                    chunk["text"] = metadata_str + chunk["text"]
+                elif isinstance(chunk, tuple) and len(chunk) >= 2:
+                    # Handle tuple format
                     chunked[index] = (
-                        (chunk[0], metadata_str + chunk[1], chunk[2]) if chunk else None
+                        chunk[0], 
+                        metadata_str + chunk[1], 
+                        chunk[2] if len(chunk) > 2 else len(encode_fn(chunk[1]))
                     )
-
-        # Optimized metadata enhancement (only when necessary)
-        if "metadata" in row and has_html_in_metadata:
-            chunked = enhance_chunks_with_metadata(chunked, row["metadata"])
 
         # Store the chunks
         row["chunks"] = chunked
@@ -279,39 +285,62 @@ def create_base_text_units(
         lambda row: gen_sha512_hash(row, ["chunk"]), axis=1
     )
 
-    # Extract document IDs, text, and tokens
+    # Extract document IDs, text, and tokens with improved handling
     try:
-        # Convert chunks to DataFrame for extraction
-        chunks_df = pd.DataFrame(aggregated["chunk"].tolist(), index=aggregated.index)
-
-        # Set column names based on length
-        if len(chunks_df.columns) >= 4:
-            # Has metadata column
-            chunks_df.columns = ["document_ids", "text", "n_tokens", "metadata"]
-            # Convert metadata to string to avoid mixed type issues
-            chunk_metadata = chunks_df["metadata"].apply(
-                lambda x: json.dumps(x)
-                if isinstance(x, dict)
-                else (x if isinstance(x, str) else None)
-            )
-            aggregated["chunk_metadata"] = chunk_metadata
-        else:
-            # Standard columns
-            chunks_df.columns = ["document_ids", "text", "n_tokens"]
-
-        # Add extracted columns
-        aggregated["document_ids"] = chunks_df["document_ids"]
-        aggregated["text"] = chunks_df["text"]
-        aggregated["n_tokens"] = chunks_df["n_tokens"]
+        log.info("Extracting chunk components with structural information")
+        
+        # Process chunks that may have different formats
+        processed_chunks = []
+        for idx, chunk in aggregated["chunk"].items():
+            if chunk is None:
+                continue
+                
+            processed_chunk = {}
+            
+            if isinstance(chunk, dict):
+                # New format with position tracking
+                processed_chunk["document_ids"] = chunk.get("document_ids", [])
+                processed_chunk["text"] = chunk.get("text", "")
+                processed_chunk["n_tokens"] = chunk.get("n_tokens", 0)
+                processed_chunk["char_start"] = chunk.get("char_start")
+                processed_chunk["char_end"] = chunk.get("char_end")
+                processed_chunk["source_metadata"] = chunk.get("source_metadata")
+            elif isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
+                # Legacy tuple format
+                processed_chunk["document_ids"] = chunk[0] if isinstance(chunk[0], list) else [chunk[0]]
+                processed_chunk["text"] = chunk[1]
+                processed_chunk["n_tokens"] = chunk[2]
+                processed_chunk["char_start"] = None
+                processed_chunk["char_end"] = None
+                processed_chunk["source_metadata"] = None
+            else:
+                log.warning(f"Unexpected chunk format: {type(chunk)}")
+                continue
+                
+            processed_chunks.append((idx, processed_chunk))
+        
+        # Create new columns from processed chunks
+        for idx, chunk_data in processed_chunks:
+            aggregated.loc[idx, "document_ids"] = chunk_data["document_ids"]
+            aggregated.loc[idx, "text"] = chunk_data["text"]
+            aggregated.loc[idx, "n_tokens"] = chunk_data["n_tokens"]
+            aggregated.loc[idx, "char_start"] = chunk_data["char_start"]
+            aggregated.loc[idx, "char_end"] = chunk_data["char_end"] 
+            aggregated.loc[idx, "source_metadata"] = chunk_data["source_metadata"]
 
     except Exception as e:
         log.error(f"Error extracting chunk components: {e}")
-        # Create a simple extraction using original method as fallback
-        aggregated[["document_ids", "chunk", "n_tokens"]] = pd.DataFrame(
-            aggregated["chunk"].tolist(), index=aggregated.index
-        )
-        # Rename for downstream consumption
-        aggregated.rename(columns={"chunk": "text"}, inplace=True)
+        # Fallback to original method
+        try:
+            chunks_df = pd.DataFrame(aggregated["chunk"].tolist(), index=aggregated.index)
+            if len(chunks_df.columns) >= 3:
+                chunks_df.columns = ["document_ids", "text", "n_tokens"]
+                aggregated["document_ids"] = chunks_df["document_ids"]
+                aggregated["text"] = chunks_df["text"]
+                aggregated["n_tokens"] = chunks_df["n_tokens"]
+        except Exception as e2:
+            log.error(f"Fallback extraction also failed: {e2}")
+            raise
 
     # Ensure document_ids is always a list to prevent mixed type errors
     log.info("Normalizing document_ids format")
@@ -319,44 +348,38 @@ def create_base_text_units(
         lambda x: [] if x is None else (x if isinstance(x, list) else [x])
     )
 
-    # Add HTML structure columns if metadata contains HTML
-    if "chunk_metadata" in aggregated.columns and has_html_in_metadata:
-        # Initialize structural columns with default None values
-        aggregated[PAGE_ID] = None
-        aggregated[PAGE_NUMBER] = None
-        aggregated[PARAGRAPH_ID] = None
-        aggregated[PARAGRAPH_NUMBER] = None
-        aggregated[CHAR_POSITION_START] = None
-        aggregated[CHAR_POSITION_END] = None
+    # Initialize structural columns
+    log.info("Initializing structural columns")
+    aggregated[PAGE_ID] = None
+    aggregated[PAGE_NUMBER] = None
+    aggregated[PARAGRAPH_ID] = None
+    aggregated[PARAGRAPH_NUMBER] = None
+    aggregated[CHAR_POSITION_START] = None
+    aggregated[CHAR_POSITION_END] = None
 
-        # Create attributes from structured info preserving PRIMARY data
-        log.info("Creating attributes column with preserved structural data")
-        aggregated["attributes"] = aggregated.apply(
-            lambda row: create_attributes(row.get("chunk_metadata", None)), axis=1
-        )
+    # Extract structural information if available
+    if has_html_in_metadata:
+        log.info("Extracting structural information from metadata and positions")
+        aggregated = extract_structural_columns_improved(aggregated)
+    
+    # Create attributes from structural metadata
+    log.info("Creating attributes column from structural metadata")
+    aggregated["attributes"] = aggregated.apply(
+        lambda row: create_attributes_from_metadata(row.get("source_metadata")), axis=1
+    )
 
-        # Convert attributes to JSON strings to prevent Parquet issues
-        # IMPORTANT: Always store as JSON string, never as dict
-        aggregated["attributes"] = aggregated["attributes"].apply(
-            lambda x: json.dumps(x) if x is not None else "{}"
-        )
+    # Convert attributes to JSON strings to prevent Parquet issues
+    aggregated["attributes"] = aggregated["attributes"].apply(
+        lambda x: json.dumps(x) if x is not None else "{}"
+    )
 
-        # EXTRACT structural information to dedicated columns
-        log.info("Extracting structural information to dedicated columns")
-        aggregated = extract_structural_columns(aggregated)
-
-        # Remove temporary column
-        if "chunk_metadata" in aggregated.columns:
-            aggregated = aggregated.drop(columns=["chunk_metadata"])
-    else:
-        # Create empty attributes column as JSON strings and initialize structural columns
-        aggregated["attributes"] = ["{}"] * len(aggregated)
-        aggregated[PAGE_ID] = None
-        aggregated[PAGE_NUMBER] = None
-        aggregated[PARAGRAPH_ID] = None
-        aggregated[PARAGRAPH_NUMBER] = None
-        aggregated[CHAR_POSITION_START] = None
-        aggregated[CHAR_POSITION_END] = None
+    # Clean up temporary columns
+    if "source_metadata" in aggregated.columns:
+        aggregated = aggregated.drop(columns=["source_metadata"])
+    if "char_start" in aggregated.columns:
+        aggregated = aggregated.drop(columns=["char_start"])
+    if "char_end" in aggregated.columns:
+        aggregated = aggregated.drop(columns=["char_end"])
 
     # Filter out rows with no text and reset index
     log.info("Finalizing results")
@@ -403,196 +426,234 @@ def create_base_text_units(
     return result
 
 
-def create_attributes(metadata_str) -> dict:
-    """Create attributes dictionary preserving primary structural information."""
-    log.info("Creating attributes from metadata string")
-
-    attributes = {}
-
-    # Parse metadata if it's a string
-    metadata = {}
-    if isinstance(metadata_str, str) and metadata_str:
-        try:
-            log.debug(
-                f"Parsing JSON metadata string: {metadata_str[:100]}..."
-                if len(metadata_str) > 100
-                else metadata_str
-            )
-            metadata = json.loads(metadata_str)
-        except Exception as e:
-            log.warning(f"Failed to parse metadata JSON: {e}")
-            return attributes
-    else:
-        log.debug(f"Metadata is not a string: {type(metadata_str)}")
-
-    # Log the full metadata structure for debugging
-    try:
-        metadata_sample = (
-            str(metadata)[:500] + "..." if len(str(metadata)) > 500 else str(metadata)
+def chunk_text_with_positions(
+    texts: list,
+    size: int,
+    overlap: int,
+    strategy: ChunkStrategyType,
+    encode_fn,
+    decode_fn,
+    metadata: Any = None
+) -> list:
+    """Enhanced chunking that tracks character positions and extracts structural info."""
+    if strategy == ChunkStrategyType.tokens:
+        return chunk_texts_by_tokens_with_positions(
+            texts, size, overlap, encode_fn, decode_fn, metadata
         )
-        log.debug(f"Raw metadata structure: {metadata_sample}")
-    except Exception as e:
-        log.warning(f"Failed to log metadata structure: {e}")
-
-    # PRESERVE PRIMARY STRUCTURAL INFORMATION - DO NOT REMOVE
-    if isinstance(metadata, dict) and "html" in metadata:
-        html = metadata.get("html", {})
-        if isinstance(html, dict):
-            log.debug(f"HTML metadata keys: {list(html.keys())}")
-
-            # Keep ALL HTML properties including pages and paragraphs
-            # These are PRIMARY structural attributes, not just metadata
-            html_props = {}
-            for key, value in html.items():
-                if isinstance(value, (str, int, float, bool, type(None))):
-                    html_props[key] = value
-                    log.debug(f"Added HTML property {key}: {value}")
-                elif key in ["pages", "paragraphs"]:
-                    # CRITICAL: Keep pages and paragraphs as they contain primary structural data
-                    if isinstance(value, list):
-                        # Preserve the structural information but ensure serializable format
-                        html_props[key] = value  # Keep the full list
-                        log.info(
-                            f"PRESERVED primary structural data '{key}' with {len(value)} elements"
-                        )
-                    else:
-                        html_props[key] = value
-                        log.debug(f"Added non-list {key}: {type(value)}")
-                else:
-                    # For other complex objects, convert to string but preserve structure
-                    if isinstance(value, (dict, list)):
-                        html_props[key] = json.dumps(value) if value else None
-                        log.debug(f"Serialized complex HTML property {key}")
-                    else:
-                        html_props[key] = str(value) if value is not None else None
-                        log.debug(f"Converted HTML property {key} to string")
-
-            attributes["html"] = html_props
-
-    # PRESERVE page, paragraph, and char_position as PRIMARY attributes
-    for key in ["page", "paragraph", "char_position"]:
-        if key in metadata and metadata[key]:
-            log.debug(f"Processing PRIMARY attribute {key}: {metadata[key]}")
-
-            if isinstance(metadata[key], dict):
-                # Keep the full dictionary structure for primary attributes
-                attributes[key] = metadata[key]
-                log.info(
-                    f"PRESERVED primary attribute {key} with keys: {list(metadata[key].keys())}"
-                )
-            elif isinstance(metadata[key], (list, str, int, float, bool)):
-                # Keep primitive and list values as-is
-                attributes[key] = metadata[key]
-                log.info(f"PRESERVED primary attribute {key}: {type(metadata[key])}")
-            else:
-                # Convert complex objects to serializable format but preserve data
-                try:
-                    attributes[key] = (
-                        json.loads(json.dumps(metadata[key])) if metadata[key] else None
-                    )
-                    log.info(f"PRESERVED primary attribute {key} after serialization")
-                except (TypeError, ValueError):
-                    attributes[key] = str(metadata[key])
-                    log.warning(
-                        f"Converted primary attribute {key} to string due to serialization issues"
-                    )
-
-    # Log the final attributes structure
-    log.info(
-        f"Final attributes created with PRIMARY structural data preserved: {list(attributes.keys())}"
-    )
-
-    return attributes
+    else:
+        # Fallback to original implementation for other strategies
+        df = pd.DataFrame({"texts": [texts]})
+        chunks = chunk_text(
+            df,
+            column="texts",
+            size=size,
+            overlap=overlap,
+            encoding_model="",  # We already have the functions
+            strategy=strategy,
+            callbacks=WorkflowCallbacks(),
+        )[0]
+        
+        # Convert to enhanced format
+        enhanced_chunks = []
+        for chunk in chunks:
+            if isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
+                enhanced_chunks.append({
+                    "document_ids": chunk[0],
+                    "text": chunk[1],
+                    "n_tokens": chunk[2],
+                    "char_start": None,
+                    "char_end": None,
+                    "source_metadata": metadata
+                })
+        return enhanced_chunks
 
 
-def extract_structural_columns(aggregated: pd.DataFrame) -> pd.DataFrame:
-    """Extract structural information to dedicated columns while preserving in attributes."""
+def chunk_texts_by_tokens_with_positions(
+    texts: list,
+    size: int,  
+    overlap: int,
+    encode_fn,
+    decode_fn,
+    metadata: Any = None
+) -> list:
+    """Enhanced token-based chunking that tracks positions and extracts structural info."""
+    results = []
+    
+    # Parse metadata once if available
+    parsed_metadata = None
+    if metadata:
+        if isinstance(metadata, str):
+            try:
+                parsed_metadata = json.loads(metadata)
+            except:
+                pass
+        elif isinstance(metadata, dict):
+            parsed_metadata = metadata
+
+    for doc_id, text in texts:
+        if not text or pd.isna(text):
+            continue
+
+        text_str = str(text)
+        
+        # Tokenize once
+        tokens = encode_fn(text_str)
+        
+        # Create chunks efficiently with position tracking
+        start_idx = 0
+        char_offset = 0
+        
+        while start_idx < len(tokens):
+            end_idx = min(start_idx + size, len(tokens))
+            chunk_tokens = tokens[start_idx:end_idx]
+            chunk_text = decode_fn(chunk_tokens)
+            
+            # Calculate character positions in original text
+            char_start = None
+            char_end = None
+            
+            try:
+                # Find the chunk text in the original text starting from char_offset
+                chunk_start_in_text = text_str.find(chunk_text.strip(), char_offset)
+                if chunk_start_in_text >= 0:
+                    char_start = chunk_start_in_text
+                    char_end = char_start + len(chunk_text.strip())
+                    char_offset = char_end
+            except:
+                pass  # Position tracking failed, continue without positions
+            
+            # Extract structural information for this chunk
+            structural_info = extract_chunk_structural_info(
+                chunk_text, char_start, char_end, parsed_metadata
+            )
+            
+            chunk_data = {
+                "document_ids": [doc_id],
+                "text": chunk_text,
+                "n_tokens": len(chunk_tokens),
+                "char_start": char_start,
+                "char_end": char_end,
+                "source_metadata": parsed_metadata,
+                **structural_info  # Add any extracted structural info
+            }
+            
+            results.append(chunk_data)
+
+            if end_idx >= len(tokens):
+                break
+
+            start_idx += size - overlap
+
+    return results
+
+
+def extract_chunk_structural_info(chunk_text: str, char_start: int, char_end: int, metadata: dict) -> dict:
+    """Extract structural information for a specific chunk based on its position and content."""
+    structural_info = {}
+    
+    if not metadata or not isinstance(metadata, dict):
+        return structural_info
+        
+    html_data = metadata.get("html", {})
+    if not isinstance(html_data, dict):
+        return structural_info
+    
+    # Extract page information based on character position
+    pages = html_data.get("pages", [])
+    if isinstance(pages, list) and char_start is not None:
+        # Find the page this chunk belongs to
+        # For now, we'll use a simple heuristic based on position
+        # This could be improved with more sophisticated page boundary detection
+        total_pages = len(pages)
+        if total_pages > 0:
+            # Estimate page based on character position
+            # This is a rough approximation - in a real implementation,
+            # you'd want to track actual page boundaries during parsing
+            estimated_page_idx = min(int(char_start / 10000), total_pages - 1)  # Rough estimate
+            if 0 <= estimated_page_idx < len(pages):
+                page_info = pages[estimated_page_idx]
+                if isinstance(page_info, dict):
+                    structural_info["page_id"] = page_info.get("page_id")
+                    structural_info["page_number"] = page_info.get("page_num")
+    
+    # Extract paragraph information based on character position
+    paragraphs = html_data.get("paragraphs", [])
+    if isinstance(paragraphs, list) and char_start is not None and char_end is not None:
+        # Find paragraphs that overlap with this chunk
+        for para in paragraphs:
+            if isinstance(para, dict):
+                para_start = para.get("char_start")
+                para_end = para.get("char_end")
+                
+                if (para_start is not None and para_end is not None and
+                    char_start < para_end and char_end > para_start):
+                    # This paragraph overlaps with the chunk
+                    structural_info["paragraph_id"] = para.get("para_id")
+                    structural_info["paragraph_number"] = para.get("para_num")
+                    structural_info["char_position_start"] = char_start
+                    structural_info["char_position_end"] = char_end
+                    break  # Use the first matching paragraph
+    
+    return structural_info
+
+
+def extract_structural_columns_improved(aggregated: pd.DataFrame) -> pd.DataFrame:
+    """Extract structural information to dedicated columns from chunk data."""
     log.info("Extracting structural information to dedicated columns")
 
-    # Extract structural information from attributes for each row
     def extract_row_structure(row):
         try:
-            # Parse attributes if it's a string
-            attrs = row.get("attributes", "{}")
-            if isinstance(attrs, str):
-                try:
-                    attrs = json.loads(attrs)
-                except:
-                    attrs = {}
-
-            # Extract page information
-            if "page" in attrs and isinstance(attrs["page"], dict):
-                page_info = attrs["page"]
-                row[PAGE_ID] = page_info.get("id") or page_info.get("page_id")
-                row[PAGE_NUMBER] = page_info.get("number") or page_info.get("page_num")
-                log.debug(
-                    f"Extracted page info: ID={row[PAGE_ID]}, Number={row[PAGE_NUMBER]}"
+            # First, try to get structural info from the chunk data itself
+            chunk = row.get("chunk")
+            if isinstance(chunk, dict):
+                # New chunk format may already have structural info
+                if "page_id" in chunk:
+                    row[PAGE_ID] = chunk["page_id"]
+                if "page_number" in chunk:
+                    row[PAGE_NUMBER] = chunk["page_number"]
+                if "paragraph_id" in chunk:
+                    row[PARAGRAPH_ID] = chunk["paragraph_id"]
+                if "paragraph_number" in chunk:
+                    row[PARAGRAPH_NUMBER] = chunk["paragraph_number"]
+                if "char_position_start" in chunk:
+                    row[CHAR_POSITION_START] = chunk["char_position_start"]
+                if "char_position_end" in chunk:
+                    row[CHAR_POSITION_END] = chunk["char_position_end"]
+            
+            # Also try to extract from source metadata if available
+            source_metadata = row.get("source_metadata")
+            char_start = row.get("char_start")
+            char_end = row.get("char_end")
+            chunk_text = row.get("text", "")
+            
+            if source_metadata and isinstance(source_metadata, dict):
+                structural_info = extract_chunk_structural_info(
+                    chunk_text, char_start, char_end, source_metadata
                 )
-
-            # Extract paragraph information
-            if "paragraph" in attrs and isinstance(attrs["paragraph"], dict):
-                para_info = attrs["paragraph"]
-                row[PARAGRAPH_ID] = para_info.get("id") or para_info.get("para_id")
-                row[PARAGRAPH_NUMBER] = para_info.get("number") or para_info.get(
-                    "para_num"
-                )
-                log.debug(
-                    f"Extracted paragraph info: ID={row[PARAGRAPH_ID]}, Number={row[PARAGRAPH_NUMBER]}"
-                )
-
-            # Extract character position information
-            if "char_position" in attrs and isinstance(attrs["char_position"], dict):
-                char_info = attrs["char_position"]
-                row[CHAR_POSITION_START] = char_info.get("start") or char_info.get(
-                    "char_start"
-                )
-                row[CHAR_POSITION_END] = char_info.get("end") or char_info.get(
-                    "char_end"
-                )
-                log.debug(
-                    f"Extracted char positions: Start={row[CHAR_POSITION_START]}, End={row[CHAR_POSITION_END]}"
-                )
-
-            # Also check HTML structure for additional information
-            if "html" in attrs and isinstance(attrs["html"], dict):
-                html_info = attrs["html"]
-
-                # Look for page/paragraph arrays to extract specific chunk positions
-                if "pages" in html_info and isinstance(html_info["pages"], list):
-                    # Extract page information based on chunk content or position
-                    chunk_content = row.get("text", "")
-                    page_match = find_chunk_page_info(chunk_content, html_info["pages"])
-                    if page_match:
-                        row[PAGE_ID] = page_match.get("page_id")
-                        row[PAGE_NUMBER] = page_match.get("page_num")
-                        log.debug(
-                            f"Found page match from HTML: ID={page_match.get('page_id')}, Number={page_match.get('page_num')}"
-                        )
-
-                if "paragraphs" in html_info and isinstance(
-                    html_info["paragraphs"], list
-                ):
-                    # Extract paragraph information based on chunk content or position
-                    chunk_content = row.get("text", "")
-                    para_match = find_chunk_paragraph_info(
-                        chunk_content, html_info["paragraphs"]
-                    )
-                    if para_match:
-                        row[PARAGRAPH_ID] = para_match.get("para_id")
-                        row[PARAGRAPH_NUMBER] = para_match.get("para_num")
-                        row[CHAR_POSITION_START] = para_match.get("char_start")
-                        row[CHAR_POSITION_END] = para_match.get("char_end")
-                        log.debug(
-                            f"Found paragraph match from HTML: ID={para_match.get('para_id')}, Number={para_match.get('para_num')}"
-                        )
-
+                
+                # Only override if we don't already have values
+                for key, value in structural_info.items():
+                    if value is not None:
+                        if key == "page_id" and row.get(PAGE_ID) is None:
+                            row[PAGE_ID] = value
+                        elif key == "page_number" and row.get(PAGE_NUMBER) is None:
+                            row[PAGE_NUMBER] = value
+                        elif key == "paragraph_id" and row.get(PARAGRAPH_ID) is None:
+                            row[PARAGRAPH_ID] = value
+                        elif key == "paragraph_number" and row.get(PARAGRAPH_NUMBER) is None:
+                            row[PARAGRAPH_NUMBER] = value
+                        elif key == "char_position_start" and row.get(CHAR_POSITION_START) is None:
+                            row[CHAR_POSITION_START] = value
+                        elif key == "char_position_end" and row.get(CHAR_POSITION_END) is None:
+                            row[CHAR_POSITION_END] = value
+                            
         except Exception as e:
             log.warning(f"Error extracting structural information from row: {e}")
 
         return row
 
     # Apply extraction to each row
-    log.info("Applying structural extraction to each row")
+    log.info("Applying improved structural extraction to each row")
     aggregated = aggregated.apply(extract_row_structure, axis=1)
 
     # Log summary of extracted information
@@ -611,39 +672,35 @@ def extract_structural_columns(aggregated: pd.DataFrame) -> pd.DataFrame:
     return aggregated
 
 
-def determine_chunk_position(chunk_text: str, html_meta: dict) -> dict:
-    """Determine the position of a chunk within the document structure."""
-    # With simplified HTML structure, position determination should happen
-    # during the chunking process using character positions, not retroactively
-    # by matching text content
-    log.debug("Position determination disabled - should be handled during chunking")
-    return {}
+def create_attributes_from_metadata(metadata: Any) -> dict:
+    """Create attributes dictionary from source metadata."""
+    if not metadata or not isinstance(metadata, dict):
+        return {}
+        
+    # Create a simplified attributes structure
+    attributes = {}
+    
+    # Preserve HTML structure info
+    if "html" in metadata:
+        html_data = metadata["html"]
+        if isinstance(html_data, dict):
+            # Create a lightweight version for attributes
+            html_attrs = {
+                "doc_type": html_data.get("doc_type"),
+                "filename": html_data.get("filename"),
+                "has_pages": bool(html_data.get("pages")),
+                "has_paragraphs": bool(html_data.get("paragraphs")),
+                "page_count": len(html_data.get("pages", [])),
+                "paragraph_count": len(html_data.get("paragraphs", []))
+            }
+            attributes["html"] = html_attrs
+    
+    return attributes
 
 
-def find_chunk_page_info(chunk_text: str, pages: list) -> dict:
-    """Find page information for a chunk based on its text content."""
-    # For HTML documents, page markers are just page numbers, not content boundaries
-    # We can't reliably match chunk text to page markers, so we skip page assignment
-    # Page info should be determined by character positions during chunking instead
-    log.debug("Page matching skipped for HTML - page markers don't contain content boundaries")
-    return {}
-
-
-def find_chunk_paragraph_info(chunk_text: str, paragraphs: list) -> dict:
-    """Find paragraph information for a chunk based on character positions."""
-    # For HTML documents, we only have paragraph positions (not text content)
-    # Character position matching should be done during chunking process
-    # This function returns empty since we can't match without original text
-    log.debug("Paragraph matching needs character position context from chunking process")
-    return {}
-
-
-# Production optimization helper functions
-
-
+# Keep the rest of the helper functions unchanged
 def get_cached_encoding_fn(encoding_model: str, cache_size: int = 1000):
     """Cache encoding functions for reuse across chunks."""
-    # Create a function with the specified cache size
     @lru_cache(maxsize=cache_size)
     def _cached_get_encoding_fn(model: str):
         return get_encoding_fn(model)
@@ -701,116 +758,6 @@ def process_metadata_optimized(
         metadata_tokens = 0
 
     return metadata_str, metadata_tokens
-
-
-def chunk_text_optimized(
-    texts: list,
-    size: int,
-    overlap: int,
-    strategy: ChunkStrategyType,
-    encode_fn,
-    decode_fn,
-) -> list:
-    """Optimized chunking without DataFrame overhead."""
-    if strategy == ChunkStrategyType.tokens:
-        return chunk_texts_by_tokens_optimized(
-            texts, size, overlap, encode_fn, decode_fn
-        )
-    else:
-        # Fallback to original implementation for other strategies
-        df = pd.DataFrame({"texts": [texts]})
-        return chunk_text(
-            df,
-            column="texts",
-            size=size,
-            overlap=overlap,
-            encoding_model="",  # We already have the functions
-            strategy=strategy,
-            callbacks=WorkflowCallbacks(),
-        )[0]
-
-
-def chunk_texts_by_tokens_optimized(
-    texts: list,
-    size: int,
-    overlap: int,
-    encode_fn,
-    decode_fn,
-) -> list:
-    """Optimized token-based chunking."""
-    results = []
-
-    for doc_id, text in texts:
-        if not text or pd.isna(text):
-            continue
-
-        # Tokenize once
-        tokens = encode_fn(str(text))
-
-        # Create chunks efficiently
-        start_idx = 0
-        while start_idx < len(tokens):
-            end_idx = min(start_idx + size, len(tokens))
-            chunk_tokens = tokens[start_idx:end_idx]
-            chunk_text = decode_fn(chunk_tokens)
-
-            results.append(([doc_id], chunk_text, len(chunk_tokens)))
-
-            if end_idx >= len(tokens):
-                break
-
-            start_idx += size - overlap
-
-    return results
-
-
-def enhance_chunks_with_metadata(chunks: list, metadata: Any) -> list:
-    """Optimized metadata enhancement for chunks."""
-    try:
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata)
-
-        if not isinstance(metadata, dict) or "html" not in metadata:
-            return chunks
-
-        html_meta = metadata["html"]
-        if not isinstance(html_meta, dict):
-            return chunks
-
-        # Create lightweight metadata for chunks
-        base_chunk_meta = {
-            "html": {
-                "doc_type": html_meta.get("doc_type"),
-                "has_pages": html_meta.get("has_pages", False),
-                "has_paragraphs": html_meta.get("has_paragraphs", False),
-                "page_count": html_meta.get("page_count", 0),
-                "paragraph_count": html_meta.get("paragraph_count", 0),
-            }
-        }
-
-        # Only add full structural data for first few chunks to avoid memory issues
-        enhanced_chunks = []
-        for i, chunk in enumerate(chunks):
-            if not chunk or not isinstance(chunk, tuple) or len(chunk) < 3:
-                enhanced_chunks.append(chunk)
-                continue
-
-            chunk_meta = base_chunk_meta.copy()
-
-            # Only preserve full structural data for first 10 chunks per document
-            if i < 10:
-                chunk_meta["html"].update({
-                    "pages": html_meta.get("pages", []),
-                    "paragraphs": html_meta.get("paragraphs", []),
-                })
-
-            enhanced_chunks.append((*chunk[:3], chunk_meta))
-
-        return enhanced_chunks
-
-    except Exception as e:
-        log.warning(f"Error enhancing chunks with metadata: {e}")
-        return chunks
 
 
 def process_chunks_parallel(
