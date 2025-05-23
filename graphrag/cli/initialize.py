@@ -94,35 +94,4 @@ def initialize_project_at(
             progress_logger.success(f"✅ Enhanced configuration with preset: {preset or 'auto'}")
         except Exception as e:
             progress_logger.warning(f"Failed to apply optimizations: {e}")
-            progress_logger.info("Using base configuration...")
-
-    dotenv = root / ".env"
-    if not dotenv.exists() or force:
-        with dotenv.open("wb") as file:
-            file.write(INIT_DOTENV.encode(encoding="utf-8", errors="strict"))
-
-    prompts_dir = root / "prompts"
-    if not prompts_dir.exists():
-        prompts_dir.mkdir(parents=True, exist_ok=True)
-
-    prompts = {
-        "extract_graph": GRAPH_EXTRACTION_PROMPT,
-        "summarize_descriptions": SUMMARIZE_PROMPT,
-        "extract_claims": EXTRACT_CLAIMS_PROMPT,
-        "community_report_graph": COMMUNITY_REPORT_PROMPT,
-        "community_report_text": COMMUNITY_REPORT_TEXT_PROMPT,
-        "drift_search_system_prompt": DRIFT_LOCAL_SYSTEM_PROMPT,
-        "drift_reduce_prompt": DRIFT_REDUCE_PROMPT,
-        "global_search_map_system_prompt": MAP_SYSTEM_PROMPT,
-        "global_search_reduce_system_prompt": REDUCE_SYSTEM_PROMPT,
-        "global_search_knowledge_system_prompt": GENERAL_KNOWLEDGE_INSTRUCTION,
-        "local_search_system_prompt": LOCAL_SEARCH_SYSTEM_PROMPT,
-        "basic_search_system_prompt": BASIC_SEARCH_SYSTEM_PROMPT,
-        "question_gen_system_prompt": QUESTION_SYSTEM_PROMPT,
-    }
-
-    for name, content in prompts.items():
-        prompt_file = prompts_dir / f"{name}.txt"
-        if not prompt_file.exists() or force:
-            with prompt_file.open("wb") as file:
-                file.write(content.encode(encoding="utf-8", errors="strict"))
+            progress_logger.info

@@ -274,4 +274,4 @@ exclude = ["**/node_modules", "**/__pycache__"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "auto"
 timeout = 1000
-env_files = [".env"]
+env
