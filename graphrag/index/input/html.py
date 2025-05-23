@@ -80,28 +80,22 @@ async def load_html(
         log.info(f"Extracting document structure from {path}")
         document_structure = extract_document_structure(soup, Path(path).name)
 
-        # Create HTML metadata with basic information
+        # Create HTML metadata with essential information only
         html_info = {
-            "has_pages": bool(document_structure.get("pages")),
-            "has_paragraphs": bool(document_structure.get("paragraphs")),
             "doc_type": document_structure.get("doc_type"),
             "filename": document_structure.get("filename"),
-            "page_count": len(document_structure.get("pages", [])),
-            "paragraph_count": len(document_structure.get("paragraphs", [])),
             "encoding": encoding_to_use,
-            # Add direct references to pages and paragraphs for easy access
-            "pages": document_structure.get("pages", []),
-            "paragraphs": document_structure.get("paragraphs", []),
+            # Only store the essential data for chunking
+            "pages": [{"page_id": p["page_id"], "page_num": p["page_num"]} for p in document_structure.get("pages", [])],
+            "paragraphs": [{"para_id": p["para_id"], "para_num": p["para_num"], "char_start": p["char_start"], "char_end": p["char_end"]} for p in document_structure.get("paragraphs", [])],
         }
 
         # Add detailed logging for html_info
         log.info(f"HTML metadata for {path}:")
         log.info(f"  - Document type: {html_info['doc_type']}")
         log.info(f"  - Filename: {html_info['filename']}")
-        log.info(f"  - Has pages: {html_info['has_pages']}")
-        log.info(f"  - Page count: {html_info['page_count']}")
-        log.info(f"  - Has paragraphs: {html_info['has_paragraphs']}")
-        log.info(f"  - Paragraph count: {html_info['paragraph_count']}")
+        log.info(f"  - Page count: {len(html_info['pages'])}")
+        log.info(f"  - Paragraph count: {len(html_info['paragraphs'])}")
         log.info(f"  - Encoding: {html_info['encoding']}")
         log.debug(
             f"Extracted {len(html_info['pages'])} page markers and {len(html_info['paragraphs'])} paragraphs"
@@ -126,7 +120,7 @@ async def load_html(
 
         # Add basic fields
         new_item["id"] = gen_sha512_hash(new_item, new_item.keys())
-        new_item["title"] = document_structure.get("title", str(Path(path).name))
+        new_item["title"] = document_structure.get("doc_type", str(Path(path).name))  # Use doc_type instead of title
         new_item["creation_date"] = await storage.get_creation_date(path)
 
         log.info(
@@ -151,13 +145,6 @@ def extract_document_structure(soup: BeautifulSoup, filename: str) -> Dict[str, 
         "filename": filename,  # Default to input filename
     }
 
-    # Extract document title
-    title_tag = soup.find("title")
-    if title_tag:
-        document_structure["title"] = title_tag.get_text().strip()
-        log.info(f"Extracted document title: {document_structure['title']}")
-    else:
-        log.info("No title tag found in document")
 
     # Extract document metadata
     type_tag = soup.find("type")
@@ -361,9 +348,6 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                 page_markers.append({
                     "page_id": page_id,
                     "page_num": page_num,
-                    "text": text,
-                    "tag": "p",
-                    "align": "center",
                 })
                 log.debug(
                     f"Found centered page marker: ID={page_id}, Num={page_num}, Text='{text}'"
@@ -400,9 +384,6 @@ def identify_page_markers(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                     page_markers.append({
                         "page_id": page_id,
                         "page_num": page_num,
-                        "text": text,
-                        "tag": "p",
-                        "align": p.get("align"),
                     })
                     log.debug(
                         f"Found page indicator in text: ID={page_id}, Num={page_num}, Text='{text}'"

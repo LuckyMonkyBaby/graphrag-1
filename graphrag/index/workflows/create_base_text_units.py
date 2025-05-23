@@ -613,74 +613,28 @@ def extract_structural_columns(aggregated: pd.DataFrame) -> pd.DataFrame:
 
 def determine_chunk_position(chunk_text: str, html_meta: dict) -> dict:
     """Determine the position of a chunk within the document structure."""
-    position_info = {}
-
-    try:
-        # Try to match chunk text with paragraphs to determine position
-        if "paragraphs" in html_meta and isinstance(html_meta["paragraphs"], list):
-            for para in html_meta["paragraphs"]:
-                if isinstance(para, dict) and "text" in para:
-                    # Check if chunk text matches or is contained in paragraph
-                    para_text = para["text"]
-                    if (
-                        chunk_text.strip() in para_text
-                        or para_text in chunk_text.strip()
-                    ):
-                        position_info["paragraph"] = {
-                            "para_id": para.get("para_id"),
-                            "para_num": para.get("para_num"),
-                            "char_start": para.get("char_start"),
-                            "char_end": para.get("char_end"),
-                        }
-                        break
-
-        # Try to determine page information
-        if "pages" in html_meta and isinstance(html_meta["pages"], list):
-            # This would require more sophisticated logic to match chunks to pages
-            # For now, we'll rely on the extraction from other metadata
-            pass
-
-    except Exception as e:
-        log.debug(f"Error determining chunk position: {e}")
-
-    return position_info
+    # With simplified HTML structure, position determination should happen
+    # during the chunking process using character positions, not retroactively
+    # by matching text content
+    log.debug("Position determination disabled - should be handled during chunking")
+    return {}
 
 
 def find_chunk_page_info(chunk_text: str, pages: list) -> dict:
     """Find page information for a chunk based on its text content."""
-    try:
-        for page in pages:
-            if isinstance(page, dict):
-                # Check if page has text content that matches
-                if "text" in page and chunk_text.strip() in page["text"]:
-                    return {
-                        "page_id": page.get("page_id"),
-                        "page_num": page.get("page_num"),
-                    }
-    except Exception as e:
-        log.debug(f"Error finding page info: {e}")
-
+    # For HTML documents, page markers are just page numbers, not content boundaries
+    # We can't reliably match chunk text to page markers, so we skip page assignment
+    # Page info should be determined by character positions during chunking instead
+    log.debug("Page matching skipped for HTML - page markers don't contain content boundaries")
     return {}
 
 
 def find_chunk_paragraph_info(chunk_text: str, paragraphs: list) -> dict:
-    """Find paragraph information for a chunk based on its text content."""
-
-    try:
-        for para in paragraphs:
-            if isinstance(para, dict) and "text" in para:
-                # Check for exact or partial matches
-                para_text = para["text"]
-                if chunk_text.strip() in para_text or para_text in chunk_text.strip():
-                    return {
-                        "para_id": para.get("para_id"),
-                        "para_num": para.get("para_num"),
-                        "char_start": para.get("char_start"),
-                        "char_end": para.get("char_end"),
-                    }
-    except Exception as e:
-        log.debug(f"Error finding paragraph info: {e}")
-
+    """Find paragraph information for a chunk based on character positions."""
+    # For HTML documents, we only have paragraph positions (not text content)
+    # Character position matching should be done during chunking process
+    # This function returns empty since we can't match without original text
+    log.debug("Paragraph matching needs character position context from chunking process")
     return {}
 
 
