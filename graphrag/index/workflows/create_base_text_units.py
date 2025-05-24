@@ -557,7 +557,6 @@ def create_base_text_units(
             
         except Exception as e2:
             log.error(f"Improved fallback extraction also failed: {e2}")
-            raise")
         
         # DEBUG: Detailed analysis of chunk structure
         log.info("=== DETAILED CHUNK ANALYSIS ===")
