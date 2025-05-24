@@ -167,8 +167,12 @@ def create_base_text_units(
         log.info("=== FIRST DOCUMENT SAMPLE ===")
         first_doc = documents.iloc[0]
         log.info(f"Document ID: {first_doc.get('id', 'N/A')}")
-        log.info(f"Text length: {len(str(first_doc.get('text', '')))}")
-        log.info(f"Text sample (first 200 chars): {str(first_doc.get('text', ''))[:200]}")
+        text_content = str(first_doc.get('text', ''))
+        log.info(f"Text length: {len(text_content)}")
+        # Limit text to first 50 words
+        text_words = text_content.split()[:50]
+        text_sample = ' '.join(text_words) + ('...' if len(text_content.split()) > 50 else '')
+        log.info(f"Text sample (first 50 words): {text_sample}")
         
         if 'metadata' in first_doc and first_doc['metadata'] is not None:
             log.info(f"Metadata type: {type(first_doc['metadata'])}")
@@ -370,6 +374,13 @@ def create_base_text_units(
     log.info("=== DEBUGGING AFTER EXPLODE ===")
     log.info(f"Shape after explode: {aggregated.shape}")
     log.info(f"Columns after explode: {list(aggregated.columns)}")
+    log.info(f"Index after explode: {aggregated.index}")
+    log.info(f"Index has duplicates: {aggregated.index.has_duplicates}")
+    
+    # CRITICAL FIX: Reset index after explode to avoid duplicate index issues
+    aggregated = aggregated.reset_index(drop=True)
+    log.info(f"Shape after reset_index: {aggregated.shape}")
+    log.info(f"Index after reset_index: {aggregated.index}")
     
     # Sample the exploded chunks
     if len(aggregated) > 0:
@@ -379,9 +390,20 @@ def create_base_text_units(
             log.info(f"  Row {i}: type={type(chunk)}")
             if isinstance(chunk, dict):
                 log.info(f"    Dict keys: {list(chunk.keys())}")
+                # Show text preview if present
+                if "text" in chunk and isinstance(chunk["text"], str):
+                    text_words = chunk["text"].split()[:10]
+                    text_preview = ' '.join(text_words) + ('...' if len(chunk["text"].split()) > 10 else '')
+                    log.info(f"    Text preview: {text_preview}")
             elif isinstance(chunk, (list, tuple)):
                 log.info(f"    Tuple/List length: {len(chunk)}")
-            log.info(f"    Content: {chunk}")
+                # Show text preview if at expected position
+                if len(chunk) > 1 and isinstance(chunk[1], str):
+                    text_words = chunk[1].split()[:10]
+                    text_preview = ' '.join(text_words) + ('...' if len(chunk[1].split()) > 10 else '')
+                    log.info(f"    Text preview: {text_preview}")
+            else:
+                log.info(f"    Content type: {type(chunk)}")
 
     # Rename chunks column
     aggregated.rename(
@@ -399,6 +421,128 @@ def create_base_text_units(
     # Extract document IDs, text, and tokens with improved handling
     try:
         log.info("Extracting chunk components with structural information")
+        
+        # DEBUG: Detailed analysis of chunk structure
+        log.info("=== DETAILED CHUNK ANALYSIS ===")
+        unique_chunk_types = aggregated["chunk"].apply(type).value_counts()
+        log.info(f"Chunk type distribution: {unique_chunk_types}")
+        
+        # Analyze each chunk type
+        for chunk_type in unique_chunk_types.index:
+            sample_chunks = aggregated[aggregated["chunk"].apply(type) == chunk_type]["chunk"]
+            log.info(f"\n--- Analyzing {chunk_type} chunks ---")
+            log.info(f"Count: {len(sample_chunks)}")
+            
+            if len(sample_chunks) > 0:
+                first_sample = sample_chunks.iloc[0]
+                log.info(f"First sample: {first_sample}")
+                
+                if chunk_type == dict:
+                    log.info(f"Dict keys: {list(first_sample.keys()) if first_sample else 'None'}")
+                    if first_sample:
+                        for key, value in first_sample.items():
+                            if key == "text" and isinstance(value, str):
+                                # Limit text to 10 words for logging
+                                text_words = value.split()[:10]
+                                text_preview = ' '.join(text_words) + ('...' if len(value.split()) > 10 else '')
+                                log.info(f"  {key}: {type(value)} = {text_preview}")
+                            else:
+                                log.info(f"  {key}: {type(value)} = {value}")
+                elif chunk_type in [list, tuple]:
+                    log.info(f"Length: {len(first_sample) if first_sample else 'None'}")
+                    if first_sample:
+                        for i, item in enumerate(first_sample):
+                            if i == 1 and isinstance(item, str):  # Assuming text is at index 1
+                                # Limit text to 10 words for logging
+                                text_words = item.split()[:10]
+                                text_preview = ' '.join(text_words) + ('...' if len(item.split()) > 10 else '')
+                                log.info(f"  [{i}]: {type(item)} = {text_preview}")
+                            else:
+                                log.info(f"  [{i}]: {type(item)} = {item}")
+        
+        # Initialize new columns first
+        log.info("Initializing new columns")
+        aggregated["document_ids"] = None
+        aggregated["text"] = None
+        aggregated["n_tokens"] = None
+        aggregated["char_start"] = None
+        aggregated["char_end"] = None
+        aggregated["source_metadata"] = None
+        
+        # Process chunks that may have different formats
+        log.info("Processing chunks with proper indexing")
+        for i in range(len(aggregated)):
+            chunk = aggregated.iloc[i]["chunk"]
+            log.info(f"\nProcessing chunk at position {i}")
+            log.info(f"Chunk type: {type(chunk)}")
+            
+            if chunk is None:
+                log.info("Skipping None chunk")
+                continue
+                
+            if isinstance(chunk, dict):
+                log.info("Processing dict format chunk")
+                # New format with position tracking
+                aggregated.iloc[i, aggregated.columns.get_loc("document_ids")] = chunk.get("document_ids", [])
+                aggregated.iloc[i, aggregated.columns.get_loc("text")] = chunk.get("text", "")
+                aggregated.iloc[i, aggregated.columns.get_loc("n_tokens")] = chunk.get("n_tokens", 0)
+                aggregated.iloc[i, aggregated.columns.get_loc("char_start")] = chunk.get("char_start")
+                aggregated.iloc[i, aggregated.columns.get_loc("char_end")] = chunk.get("char_end")
+                aggregated.iloc[i, aggregated.columns.get_loc("source_metadata")] = chunk.get("source_metadata")
+                log.info(f"Successfully set dict data for position {i}")
+            elif isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
+                log.info(f"Processing tuple/list format chunk with {len(chunk)} elements")
+                # Legacy tuple format
+                aggregated.iloc[i, aggregated.columns.get_loc("document_ids")] = chunk[0] if isinstance(chunk[0], list) else [chunk[0]]
+                aggregated.iloc[i, aggregated.columns.get_loc("text")] = chunk[1]
+                aggregated.iloc[i, aggregated.columns.get_loc("n_tokens")] = chunk[2]
+                aggregated.iloc[i, aggregated.columns.get_loc("char_start")] = None
+                aggregated.iloc[i, aggregated.columns.get_loc("char_end")] = None
+                aggregated.iloc[i, aggregated.columns.get_loc("source_metadata")] = None
+                log.info(f"Successfully set tuple data for position {i}")
+            else:
+                log.warning(f"Unexpected chunk format: {type(chunk)} with content: {chunk}")
+                continue
+
+    except Exception as e:
+        log.error(f"Error extracting chunk components: {e}")
+        log.error(f"Aggregated DataFrame info:")
+        log.error(f"  Shape: {aggregated.shape}")
+        log.error(f"  Index: {aggregated.index}")
+        log.error(f"  Columns: {list(aggregated.columns)}")
+        
+        # Fallback to original method with proper column handling
+        try:
+            log.info("Attempting improved fallback extraction method")
+            
+            # Convert chunks to list and create DataFrame
+            chunk_list = []
+            for chunk in aggregated["chunk"]:
+                if isinstance(chunk, dict):
+                    # Extract the key fields in a consistent order
+                    chunk_list.append([
+                        chunk.get("document_ids", []),
+                        chunk.get("text", ""),
+                        chunk.get("n_tokens", 0)
+                    ])
+                elif isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
+                    chunk_list.append([chunk[0], chunk[1], chunk[2]])
+                else:
+                    # Handle malformed chunks
+                    chunk_list.append([[], "", 0])
+            
+            chunks_df = pd.DataFrame(chunk_list, index=aggregated.index)
+            chunks_df.columns = ["document_ids", "text", "n_tokens"]
+            
+            log.info(f"Improved fallback chunks DataFrame shape: {chunks_df.shape}")
+            
+            aggregated["document_ids"] = chunks_df["document_ids"]
+            aggregated["text"] = chunks_df["text"]
+            aggregated["n_tokens"] = chunks_df["n_tokens"]
+            
+        except Exception as e2:
+            log.error(f"Improved fallback extraction also failed: {e2}")
+            raise")
         
         # DEBUG: Detailed analysis of chunk structure
         log.info("=== DETAILED CHUNK ANALYSIS ===")
@@ -706,7 +850,10 @@ def chunk_texts_by_tokens_with_positions(
             
             log.info(f"Creating chunk {len(results) + 1}: tokens {start_idx}-{end_idx} ({len(chunk_tokens)} tokens)")
             log.info(f"Chunk text length: {len(chunk_text)}")
-            log.info(f"Chunk text preview: {chunk_text[:100]}...")
+            # Limit chunk text to first 50 words for logging
+            chunk_words = chunk_text.split()[:50]
+            chunk_preview = ' '.join(chunk_words) + ('...' if len(chunk_text.split()) > 50 else '')
+            log.info(f"Chunk text preview (50 words): {chunk_preview}")
             
             # Calculate character positions in original text
             char_start = None
@@ -742,7 +889,12 @@ def chunk_texts_by_tokens_with_positions(
                 **structural_info  # Add any extracted structural info
             }
             
-            log.info(f"Created chunk_data: {chunk_data}")
+            # Log chunk_data but limit text field
+            chunk_data_log = chunk_data.copy()
+            if chunk_data_log.get("text"):
+                text_words = chunk_data_log["text"].split()[:10]
+                chunk_data_log["text"] = ' '.join(text_words) + ('...' if len(chunk_data["text"].split()) > 10 else '')
+            log.info(f"Created chunk_data: {chunk_data_log}")
             results.append(chunk_data)
 
             if end_idx >= len(tokens):
@@ -752,9 +904,14 @@ def chunk_texts_by_tokens_with_positions(
             start_idx += size - overlap
             log.info(f"Next chunk will start at token {start_idx}")
 
-    log.info(f"chunk_texts_by_tokens_with_positions returning {len(results)} chunks")
-    if results and len(results) > 0:
-        log.info(f"First result: {results[0]}")
+        log.info(f"First result summary:")
+        if results and len(results) > 0:
+            first_result_log = results[0].copy()
+            # Limit text for logging
+            if first_result_log.get("text"):
+                text_words = first_result_log["text"].split()[:10]
+                first_result_log["text"] = ' '.join(text_words) + ('...' if len(results[0]["text"].split()) > 10 else '')
+            log.info(f"First result: {first_result_log}")
     return results
 
 
