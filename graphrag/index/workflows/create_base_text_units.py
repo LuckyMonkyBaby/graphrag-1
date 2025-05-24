@@ -460,14 +460,18 @@ def create_base_text_units(
                             else:
                                 log.info(f"  [{i}]: {type(item)} = {item}")
         
-        # Initialize new columns first
+        # Initialize new columns first to match the chunk data structure
         log.info("Initializing new columns")
         aggregated["document_ids"] = None
         aggregated["text"] = None
         aggregated["n_tokens"] = None
         aggregated["char_start"] = None
         aggregated["char_end"] = None
-        aggregated["source_metadata"] = None
+        # Initialize structural columns based on what extract_chunk_structural_info returns
+        aggregated["paragraph_id"] = None
+        aggregated["paragraph_number"] = None
+        aggregated["char_position_start"] = None
+        aggregated["char_position_end"] = None
         
         # Process chunks that may have different formats
         log.info("Processing chunks with proper indexing")
@@ -482,13 +486,25 @@ def create_base_text_units(
                 
             if isinstance(chunk, dict):
                 log.info("Processing dict format chunk")
-                # New format with position tracking
+                log.info(f"Dict keys: {list(chunk.keys())}")
+                
+                # Extract basic chunk data
                 aggregated.iloc[i, aggregated.columns.get_loc("document_ids")] = chunk.get("document_ids", [])
                 aggregated.iloc[i, aggregated.columns.get_loc("text")] = chunk.get("text", "")
                 aggregated.iloc[i, aggregated.columns.get_loc("n_tokens")] = chunk.get("n_tokens", 0)
                 aggregated.iloc[i, aggregated.columns.get_loc("char_start")] = chunk.get("char_start")
                 aggregated.iloc[i, aggregated.columns.get_loc("char_end")] = chunk.get("char_end")
-                aggregated.iloc[i, aggregated.columns.get_loc("source_metadata")] = chunk.get("source_metadata")
+                
+                # Extract structural information directly from chunk (no redundant metadata storage)
+                if "paragraph_id" in chunk:
+                    aggregated.iloc[i, aggregated.columns.get_loc("paragraph_id")] = chunk.get("paragraph_id")
+                if "paragraph_number" in chunk:
+                    aggregated.iloc[i, aggregated.columns.get_loc("paragraph_number")] = chunk.get("paragraph_number")
+                if "char_position_start" in chunk:
+                    aggregated.iloc[i, aggregated.columns.get_loc("char_position_start")] = chunk.get("char_position_start")
+                if "char_position_end" in chunk:
+                    aggregated.iloc[i, aggregated.columns.get_loc("char_position_end")] = chunk.get("char_position_end")
+                
                 log.info(f"Successfully set dict data for position {i}")
             elif isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
                 log.info(f"Processing tuple/list format chunk with {len(chunk)} elements")
@@ -498,10 +514,9 @@ def create_base_text_units(
                 aggregated.iloc[i, aggregated.columns.get_loc("n_tokens")] = chunk[2]
                 aggregated.iloc[i, aggregated.columns.get_loc("char_start")] = None
                 aggregated.iloc[i, aggregated.columns.get_loc("char_end")] = None
-                aggregated.iloc[i, aggregated.columns.get_loc("source_metadata")] = None
                 log.info(f"Successfully set tuple data for position {i}")
             else:
-                log.warning(f"Unexpected chunk format: {type(chunk)} with content: {chunk}")
+                log.warning(f"Unexpected chunk format: {type(chunk)} with content type: {type(chunk)}")
                 continue
 
     except Exception as e:
@@ -542,6 +557,7 @@ def create_base_text_units(
             
         except Exception as e2:
             log.error(f"Improved fallback extraction also failed: {e2}")
+            raise")
         
         # DEBUG: Detailed analysis of chunk structure
         log.info("=== DETAILED CHUNK ANALYSIS ===")
@@ -660,24 +676,22 @@ def create_base_text_units(
         lambda x: [] if x is None else (x if isinstance(x, list) else [x])
     )
 
-    # Initialize structural columns
-    log.info("Initializing structural columns")
+    # Initialize structural columns (map from our chunk columns to schema columns)
+    log.info("Mapping structural columns to schema")
     aggregated[PAGE_ID] = None
     aggregated[PAGE_NUMBER] = None
-    aggregated[PARAGRAPH_ID] = None
-    aggregated[PARAGRAPH_NUMBER] = None
-    aggregated[CHAR_POSITION_START] = None
-    aggregated[CHAR_POSITION_END] = None
+    aggregated[PARAGRAPH_ID] = aggregated.get("paragraph_id", None)
+    aggregated[PARAGRAPH_NUMBER] = aggregated.get("paragraph_number", None)  
+    aggregated[CHAR_POSITION_START] = aggregated.get("char_position_start", None)
+    aggregated[CHAR_POSITION_END] = aggregated.get("char_position_end", None)
 
-    # Extract structural information if available
-    if has_html_in_metadata:
-        log.info("Extracting structural information from metadata and positions")
-        aggregated = extract_structural_columns_improved(aggregated)
+    # Don't run the structural extraction again - we already have the data in columns
+    log.info("Structural information already extracted to columns during chunk processing")
     
-    # Create attributes from structural metadata
-    log.info("Creating attributes column from structural metadata")
+    # Create attributes from the structural info we have (not from redundant metadata)
+    log.info("Creating attributes column from extracted structural info")
     aggregated["attributes"] = aggregated.apply(
-        lambda row: create_attributes_from_metadata(row.get("source_metadata")), axis=1
+        lambda row: create_attributes_from_structural_info(row), axis=1
     )
 
     # Convert attributes to JSON strings to prevent Parquet issues
@@ -686,12 +700,23 @@ def create_base_text_units(
     )
 
     # Clean up temporary columns
-    if "source_metadata" in aggregated.columns:
-        aggregated = aggregated.drop(columns=["source_metadata"])
+    columns_to_drop = []
+    if "paragraph_id" in aggregated.columns:
+        columns_to_drop.append("paragraph_id")
+    if "paragraph_number" in aggregated.columns:
+        columns_to_drop.append("paragraph_number") 
+    if "char_position_start" in aggregated.columns:
+        columns_to_drop.append("char_position_start")
+    if "char_position_end" in aggregated.columns:
+        columns_to_drop.append("char_position_end")
     if "char_start" in aggregated.columns:
-        aggregated = aggregated.drop(columns=["char_start"])
+        columns_to_drop.append("char_start")
     if "char_end" in aggregated.columns:
-        aggregated = aggregated.drop(columns=["char_end"])
+        columns_to_drop.append("char_end")
+    
+    if columns_to_drop:
+        aggregated = aggregated.drop(columns=columns_to_drop)
+        log.info(f"Dropped temporary columns: {columns_to_drop}")
 
     # Filter out rows with no text and reset index
     log.info("Finalizing results")
@@ -788,7 +813,7 @@ def chunk_text_with_positions(
                     "n_tokens": chunk[2],
                     "char_start": None,
                     "char_end": None,
-                    "source_metadata": metadata
+                    # Don't add source_metadata for fallback chunks
                 })
         
         log.info(f"Converted to {len(enhanced_chunks)} enhanced chunks")
@@ -884,8 +909,8 @@ def chunk_texts_by_tokens_with_positions(
                 "n_tokens": len(chunk_tokens),
                 "char_start": char_start,
                 "char_end": char_end,
-                "source_metadata": parsed_metadata,
-                **structural_info  # Add any extracted structural info
+                # DON'T store the entire source metadata - extract what we need
+                **structural_info  # This contains the actual extracted structural info
             }
             
             # Log chunk_data but limit text field
@@ -1031,6 +1056,26 @@ def extract_structural_columns_improved(aggregated: pd.DataFrame) -> pd.DataFram
         log.info(f"Extracted {non_null_count} values for {col}")
 
     return aggregated
+
+
+def create_attributes_from_structural_info(row) -> dict:
+    """Create attributes dictionary from extracted structural info in the row."""
+    attributes = {}
+    
+    # Only include info that's actually present
+    if row.get("paragraph_id") or row.get("paragraph_number"):
+        attributes["paragraph"] = {
+            "id": row.get("paragraph_id"),
+            "number": row.get("paragraph_number")
+        }
+    
+    if row.get("char_position_start") is not None or row.get("char_position_end") is not None:
+        attributes["position"] = {
+            "char_start": row.get("char_position_start"),
+            "char_end": row.get("char_position_end")
+        }
+    
+    return attributes
 
 
 def create_attributes_from_metadata(metadata: Any) -> dict:
