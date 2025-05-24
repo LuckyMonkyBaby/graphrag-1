@@ -52,7 +52,7 @@ async def run_workflow(
         unique_doc_ids = list(set(unique_doc_ids))
         input_df = pd.DataFrame({
             "id": unique_doc_ids,
-            "text": [""] * len(unique_doc_ids),  # Empty text as we don't have the original
+            "text": [""] * len(unique_doc_ids),
             "title": [f"Document {i+1}" for i in range(len(unique_doc_ids))],
             "metadata": [None] * len(unique_doc_ids)
         })
@@ -78,22 +78,11 @@ def create_final_documents(
     # Save a copy of input_df before processing
     result_df = input_df.copy()
 
-    # Process HTML metadata if available, but keep it simple
-    if "html_attributes" in result_df.columns:
-        log.info("Processing html_attributes column")
-        # Extract key HTML info into simplified structure
-        result_df["metadata"] = result_df.apply(
-            lambda row: extract_html_metadata(row), axis=1
-        )
-
-        # Remove the original complex html_attributes column
-        result_df = result_df.drop(columns=["html_attributes"])
-    elif "metadata" in result_df.columns:
-        log.info("Processing existing metadata column")
-        # Ensure metadata is properly formatted
-        result_df["metadata"] = result_df["metadata"].apply(
-            lambda x: process_existing_metadata(x)
-        )
+    # Process metadata - handle any file type
+    log.info("Processing document metadata")
+    result_df["metadata"] = result_df["metadata"].apply(
+        lambda x: process_existing_metadata(x)
+    )
 
     # Get text unit IDs for each document
     log.info("Mapping text units to documents")
@@ -139,11 +128,17 @@ def create_final_documents(
     # Add human readable ID
     merged["human_readable_id"] = [f"doc_{i + 1}" for i in range(len(merged))]
 
-    # Ensure all required columns are present
+    # Ensure all required columns are present with sensible defaults
     for col in DOCUMENTS_FINAL_COLUMNS:
         if col not in merged.columns:
             if col == "text_unit_ids":
                 merged[col] = [[] for _ in range(len(merged))]
+            elif col in ["file_path", "file_type"]:
+                # Try to extract from existing data
+                if col == "file_path":
+                    merged[col] = merged.get("title", None)
+                elif col == "file_type":
+                    merged[col] = "unknown"  # Default file type
             else:
                 merged[col] = None
             log.info(f"Added missing column: {col}")
@@ -164,7 +159,7 @@ def create_final_documents(
 
 
 def process_existing_metadata(metadata):
-    """Process existing metadata to ensure it's properly formatted."""
+    """Process existing metadata to ensure it's properly formatted for any file type."""
     if metadata is None:
         return {}
     
@@ -178,61 +173,3 @@ def process_existing_metadata(metadata):
         return metadata
     
     return {"raw": str(metadata)}
-
-
-def extract_html_metadata(row: pd.Series) -> Dict[str, Any]:
-    """Extract simplified HTML metadata."""
-    log.debug("Extracting HTML metadata from row")
-    
-    # Start with existing metadata
-    metadata = {}
-    if row.get("metadata") is not None:
-        if isinstance(row.get("metadata"), dict):
-            metadata = row.get("metadata").copy()
-        elif isinstance(row.get("metadata"), str):
-            try:
-                metadata = json.loads(row.get("metadata"))
-            except json.JSONDecodeError:
-                metadata = {"original_metadata": str(row.get("metadata"))}
-        else:
-            # Don't try to parse other complex objects
-            metadata = {"original_metadata": str(row.get("metadata"))}
-
-    # Don't process if no html_attributes
-    if row.get("html_attributes") is None:
-        return metadata
-
-    # Create simple HTML structure info
-    html_structure = {
-        "has_html_structure": True,
-        "doc_type": None,
-        "pages": [],
-    }
-
-    # Extract basic properties safely
-    html_attrs = row.get("html_attributes", {})
-
-    # Add document type if available
-    if isinstance(html_attrs, dict) and html_attrs.get("doc_type"):
-        html_structure["doc_type"] = str(html_attrs.get("doc_type"))
-
-    # Add page IDs if available, but keep it simple
-    if isinstance(html_attrs, dict) and "page_info" in html_attrs:
-        pages = html_attrs.get("page_info", [])
-        if isinstance(pages, list):
-            # Just extract page IDs and numbers
-            page_list = []
-            for page in pages:
-                if isinstance(page, dict):
-                    page_id = page.get("page_id")
-                    page_num = page.get("page_num")
-                    if page_id:
-                        page_list.append({"id": str(page_id), "num": page_num})
-
-            html_structure["pages"] = page_list
-            html_structure["page_count"] = len(page_list)
-
-    # Add to metadata
-    metadata["html"] = html_structure
-
-    return metadata

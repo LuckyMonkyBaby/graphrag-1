@@ -8,6 +8,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
+import asyncio
 
 import pandas as pd
 
@@ -78,6 +79,11 @@ async def create_input(
         )
         loader = loaders[config.file_type]
         result = await loader(config, progress, storage)
+        
+        # Add file metadata columns
+        log.info("Adding file metadata to documents")
+        result = await add_file_metadata(result, storage, config.file_type)
+        
         # Convert metadata columns to strings and collapse them into a JSON object
         if config.metadata:
             if all(col in result.columns for col in config.metadata):
@@ -97,3 +103,34 @@ async def create_input(
 
     msg = f"Unknown input type {config.file_type}"
     raise ValueError(msg)
+
+
+async def add_file_metadata(df: pd.DataFrame, storage, file_type: str) -> pd.DataFrame:
+    """Add file metadata columns to the DataFrame."""
+    
+    # Initialize the new columns
+    df["file_path"] = None
+    df["file_type"] = file_type
+    
+    # For each document, try to get file metadata
+    for idx, row in df.iterrows():
+        try:
+            # Try to extract file path from various sources
+            file_path = None
+            
+            # Check if there's a path or filename in the existing data
+            if hasattr(row, 'title') and row['title']:
+                file_path = row['title']
+            elif hasattr(row, 'id') and row['id']:
+                # For files, the title might be the filename
+                if hasattr(row, 'title'):
+                    file_path = row['title']
+            
+            # Set the file path
+            if file_path:
+                df.loc[idx, "file_path"] = file_path
+                            
+        except Exception as e:
+            log.debug(f"Error processing file metadata for row {idx}: {e}")
+    
+    return df
