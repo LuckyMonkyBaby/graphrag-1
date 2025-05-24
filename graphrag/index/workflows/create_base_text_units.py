@@ -156,6 +156,38 @@ def create_base_text_units(
         f"Production settings: batch_size={batch_size}, max_workers={max_workers}, parallel={enable_parallel}"
     )
 
+    # DEBUG: Log document structure
+    log.info("=== DEBUGGING DOCUMENT STRUCTURE ===")
+    log.info(f"Documents DataFrame shape: {documents.shape}")
+    log.info(f"Documents columns: {list(documents.columns)}")
+    log.info(f"Documents dtypes: {documents.dtypes.to_dict()}")
+    
+    # Sample document inspection
+    if len(documents) > 0:
+        log.info("=== FIRST DOCUMENT SAMPLE ===")
+        first_doc = documents.iloc[0]
+        log.info(f"Document ID: {first_doc.get('id', 'N/A')}")
+        log.info(f"Text length: {len(str(first_doc.get('text', '')))}")
+        log.info(f"Text sample (first 200 chars): {str(first_doc.get('text', ''))[:200]}")
+        
+        if 'metadata' in first_doc and first_doc['metadata'] is not None:
+            log.info(f"Metadata type: {type(first_doc['metadata'])}")
+            if isinstance(first_doc['metadata'], str):
+                try:
+                    metadata_parsed = json.loads(first_doc['metadata'])
+                    log.info(f"Parsed metadata keys: {list(metadata_parsed.keys()) if isinstance(metadata_parsed, dict) else 'Not a dict'}")
+                    if isinstance(metadata_parsed, dict) and 'html' in metadata_parsed:
+                        html_meta = metadata_parsed['html']
+                        log.info(f"HTML metadata keys: {list(html_meta.keys()) if isinstance(html_meta, dict) else 'Not a dict'}")
+                        log.info(f"Page count: {len(html_meta.get('pages', []))}")
+                        log.info(f"Paragraph count: {len(html_meta.get('paragraphs', []))}")
+                except json.JSONDecodeError as e:
+                    log.warning(f"Failed to parse metadata JSON: {e}")
+            elif isinstance(first_doc['metadata'], dict):
+                log.info(f"Direct metadata keys: {list(first_doc['metadata'].keys())}")
+        else:
+            log.info("No metadata found in first document")
+
     # Efficient sorting and preparation
     log.info("Preparing documents for processing")
     sort = documents.sort_values(by=["id"], ascending=[True]).copy()
@@ -202,11 +234,30 @@ def create_base_text_units(
     if "_temp_group" in aggregated.columns:
         aggregated.drop(columns=["_temp_group"], inplace=True)
 
+    # DEBUG: Log aggregated structure
+    log.info("=== DEBUGGING AGGREGATED STRUCTURE ===")
+    log.info(f"Aggregated DataFrame shape: {aggregated.shape}")
+    log.info(f"Aggregated columns: {list(aggregated.columns)}")
+    if len(aggregated) > 0:
+        log.info(f"First aggregated row texts type: {type(aggregated.iloc[0]['texts'])}")
+        log.info(f"First aggregated row texts length: {len(aggregated.iloc[0]['texts'])}")
+        if len(aggregated.iloc[0]['texts']) > 0:
+            first_text_item = aggregated.iloc[0]['texts'][0]
+            log.info(f"First text item type: {type(first_text_item)}")
+            log.info(f"First text item: {first_text_item}")
+
     # Cache encoding function for reuse with configurable cache size
     encode_fn, decode_fn = get_cached_encoding_fn(encoding_model, metadata_cache_size)
 
     # Define optimized chunker function
     def chunker(row: dict[str, Any]) -> Any:
+        log.info(f"=== DEBUGGING CHUNKER INPUT ===")
+        log.info(f"Row keys: {list(row.keys())}")
+        log.info(f"Texts type: {type(row.get('texts', 'N/A'))}")
+        log.info(f"Texts length: {len(row.get('texts', [])) if row.get('texts') else 'N/A'}")
+        if row.get('texts') and len(row.get('texts', [])) > 0:
+            log.info(f"First text item in chunker: {row['texts'][0]}")
+        
         line_delimiter = ".\n"
         metadata_str = ""
         metadata_tokens = 0
@@ -224,6 +275,11 @@ def create_base_text_units(
             metadata_tokens = 0
 
         # Enhanced chunking that tracks character positions
+        log.info(f"=== CALLING chunk_text_with_positions ===")
+        log.info(f"Texts to chunk: {row['texts']}")
+        log.info(f"Size: {size}, Overlap: {overlap}, Strategy: {strategy}")
+        log.info(f"Metadata tokens to subtract: {metadata_tokens}")
+        
         chunked = chunk_text_with_positions(
             row["texts"],
             size - metadata_tokens,
@@ -233,6 +289,15 @@ def create_base_text_units(
             decode_fn,
             row.get("metadata")  # Pass metadata for position tracking
         )
+
+        log.info(f"=== CHUNKING RESULTS ===")
+        log.info(f"Number of chunks returned: {len(chunked) if chunked else 'None'}")
+        if chunked and len(chunked) > 0:
+            log.info(f"First chunk type: {type(chunked[0])}")
+            log.info(f"First chunk: {chunked[0]}")
+            if len(chunked) > 1:
+                log.info(f"Second chunk type: {type(chunked[1])}")
+                log.info(f"Second chunk: {chunked[1]}")
 
         # Prepend metadata if needed
         if prepend_metadata:
@@ -250,6 +315,8 @@ def create_base_text_units(
 
         # Store the chunks
         row["chunks"] = chunked
+        log.info(f"=== CHUNKER OUTPUT ===")
+        log.info(f"Row chunks stored, length: {len(row['chunks']) if row.get('chunks') else 'None'}")
         return row
 
     # Apply chunker with batching and optional parallelization
@@ -265,12 +332,56 @@ def create_base_text_units(
         aggregated = aggregated.apply(chunker, axis=1)
         metrics.batches_processed = 1
 
+    # DEBUG: Log post-chunking structure
+    log.info("=== DEBUGGING POST-CHUNKING STRUCTURE ===")
+    log.info(f"Aggregated shape after chunking: {aggregated.shape}")
+    log.info(f"Aggregated columns after chunking: {list(aggregated.columns)}")
+    
+    if len(aggregated) > 0 and 'chunks' in aggregated.columns:
+        chunks_sample = aggregated['chunks'].iloc[0]
+        log.info(f"First row chunks type: {type(chunks_sample)}")
+        log.info(f"First row chunks length: {len(chunks_sample) if chunks_sample else 'None'}")
+        if chunks_sample and len(chunks_sample) > 0:
+            log.info(f"First chunk in first row type: {type(chunks_sample[0])}")
+            log.info(f"First chunk in first row: {chunks_sample[0]}")
+
     # Keep only necessary columns
     log.info("Processing chunked results")
     aggregated = cast("pd.DataFrame", aggregated[[*group_by_columns, "chunks"]])
 
+    # DEBUG: Before explode
+    log.info("=== DEBUGGING BEFORE EXPLODE ===")
+    log.info(f"Shape before explode: {aggregated.shape}")
+    log.info(f"Chunks column info:")
+    for i, chunks in enumerate(aggregated["chunks"]):
+        log.info(f"  Row {i}: chunks type={type(chunks)}, length={len(chunks) if chunks else 'None'}")
+        if chunks and len(chunks) > 0:
+            log.info(f"    First chunk type: {type(chunks[0])}")
+            if isinstance(chunks[0], dict):
+                log.info(f"    First chunk keys: {list(chunks[0].keys())}")
+            elif isinstance(chunks[0], (list, tuple)):
+                log.info(f"    First chunk length: {len(chunks[0])}")
+            log.info(f"    First chunk content: {chunks[0]}")
+
     # Explode to create one row per chunk
     aggregated = aggregated.explode("chunks")
+
+    # DEBUG: After explode
+    log.info("=== DEBUGGING AFTER EXPLODE ===")
+    log.info(f"Shape after explode: {aggregated.shape}")
+    log.info(f"Columns after explode: {list(aggregated.columns)}")
+    
+    # Sample the exploded chunks
+    if len(aggregated) > 0:
+        log.info("Sample of exploded chunks:")
+        for i in range(min(5, len(aggregated))):
+            chunk = aggregated.iloc[i]["chunks"]
+            log.info(f"  Row {i}: type={type(chunk)}")
+            if isinstance(chunk, dict):
+                log.info(f"    Dict keys: {list(chunk.keys())}")
+            elif isinstance(chunk, (list, tuple)):
+                log.info(f"    Tuple/List length: {len(chunk)}")
+            log.info(f"    Content: {chunk}")
 
     # Rename chunks column
     aggregated.rename(
@@ -289,15 +400,47 @@ def create_base_text_units(
     try:
         log.info("Extracting chunk components with structural information")
         
+        # DEBUG: Detailed analysis of chunk structure
+        log.info("=== DETAILED CHUNK ANALYSIS ===")
+        unique_chunk_types = aggregated["chunk"].apply(type).value_counts()
+        log.info(f"Chunk type distribution: {unique_chunk_types}")
+        
+        # Analyze each chunk type
+        for chunk_type in unique_chunk_types.index:
+            sample_chunks = aggregated[aggregated["chunk"].apply(type) == chunk_type]["chunk"]
+            log.info(f"\n--- Analyzing {chunk_type} chunks ---")
+            log.info(f"Count: {len(sample_chunks)}")
+            
+            if len(sample_chunks) > 0:
+                first_sample = sample_chunks.iloc[0]
+                log.info(f"First sample: {first_sample}")
+                
+                if chunk_type == dict:
+                    log.info(f"Dict keys: {list(first_sample.keys()) if first_sample else 'None'}")
+                    if first_sample:
+                        for key, value in first_sample.items():
+                            log.info(f"  {key}: {type(value)} = {value}")
+                elif chunk_type in [list, tuple]:
+                    log.info(f"Length: {len(first_sample) if first_sample else 'None'}")
+                    if first_sample:
+                        for i, item in enumerate(first_sample):
+                            log.info(f"  [{i}]: {type(item)} = {item}")
+        
         # Process chunks that may have different formats
         processed_chunks = []
         for idx, chunk in aggregated["chunk"].items():
+            log.info(f"\nProcessing chunk at index {idx}")
+            log.info(f"Chunk type: {type(chunk)}")
+            log.info(f"Chunk content: {chunk}")
+            
             if chunk is None:
+                log.info("Skipping None chunk")
                 continue
                 
             processed_chunk = {}
             
             if isinstance(chunk, dict):
+                log.info("Processing dict format chunk")
                 # New format with position tracking
                 processed_chunk["document_ids"] = chunk.get("document_ids", [])
                 processed_chunk["text"] = chunk.get("text", "")
@@ -305,7 +448,9 @@ def create_base_text_units(
                 processed_chunk["char_start"] = chunk.get("char_start")
                 processed_chunk["char_end"] = chunk.get("char_end")
                 processed_chunk["source_metadata"] = chunk.get("source_metadata")
+                log.info(f"Extracted from dict: {processed_chunk}")
             elif isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
+                log.info(f"Processing tuple/list format chunk with {len(chunk)} elements")
                 # Legacy tuple format
                 processed_chunk["document_ids"] = chunk[0] if isinstance(chunk[0], list) else [chunk[0]]
                 processed_chunk["text"] = chunk[1]
@@ -313,31 +458,55 @@ def create_base_text_units(
                 processed_chunk["char_start"] = None
                 processed_chunk["char_end"] = None
                 processed_chunk["source_metadata"] = None
+                log.info(f"Extracted from tuple: {processed_chunk}")
             else:
-                log.warning(f"Unexpected chunk format: {type(chunk)}")
+                log.warning(f"Unexpected chunk format: {type(chunk)} with content: {chunk}")
                 continue
                 
             processed_chunks.append((idx, processed_chunk))
         
+        log.info(f"=== PROCESSED CHUNKS SUMMARY ===")
+        log.info(f"Total processed chunks: {len(processed_chunks)}")
+        
         # Create new columns from processed chunks
         for idx, chunk_data in processed_chunks:
-            aggregated.loc[idx, "document_ids"] = chunk_data["document_ids"]
-            aggregated.loc[idx, "text"] = chunk_data["text"]
-            aggregated.loc[idx, "n_tokens"] = chunk_data["n_tokens"]
-            aggregated.loc[idx, "char_start"] = chunk_data["char_start"]
-            aggregated.loc[idx, "char_end"] = chunk_data["char_end"] 
-            aggregated.loc[idx, "source_metadata"] = chunk_data["source_metadata"]
+            log.info(f"Setting data for index {idx}: {chunk_data}")
+            try:
+                aggregated.loc[idx, "document_ids"] = chunk_data["document_ids"]
+                aggregated.loc[idx, "text"] = chunk_data["text"]
+                aggregated.loc[idx, "n_tokens"] = chunk_data["n_tokens"]
+                aggregated.loc[idx, "char_start"] = chunk_data["char_start"]
+                aggregated.loc[idx, "char_end"] = chunk_data["char_end"] 
+                aggregated.loc[idx, "source_metadata"] = chunk_data["source_metadata"]
+                log.info(f"Successfully set data for index {idx}")
+            except Exception as e:
+                log.error(f"Error setting data for index {idx}: {e}")
+                log.error(f"Aggregated index info: {aggregated.index}")
+                log.error(f"Trying to set at index {idx} which exists: {idx in aggregated.index}")
+                raise
 
     except Exception as e:
         log.error(f"Error extracting chunk components: {e}")
+        log.error(f"Aggregated DataFrame info:")
+        log.error(f"  Shape: {aggregated.shape}")
+        log.error(f"  Index: {aggregated.index}")
+        log.error(f"  Columns: {list(aggregated.columns)}")
+        
         # Fallback to original method
         try:
+            log.info("Attempting fallback extraction method")
             chunks_df = pd.DataFrame(aggregated["chunk"].tolist(), index=aggregated.index)
+            log.info(f"Chunks DataFrame shape: {chunks_df.shape}")
+            log.info(f"Chunks DataFrame columns: {list(chunks_df.columns)}")
+            
             if len(chunks_df.columns) >= 3:
                 chunks_df.columns = ["document_ids", "text", "n_tokens"]
                 aggregated["document_ids"] = chunks_df["document_ids"]
                 aggregated["text"] = chunks_df["text"]
                 aggregated["n_tokens"] = chunks_df["n_tokens"]
+            else:
+                log.error(f"Chunks DataFrame has {len(chunks_df.columns)} columns, expected at least 3")
+                raise ValueError(f"Insufficient columns in chunks DataFrame: {len(chunks_df.columns)}")
         except Exception as e2:
             log.error(f"Fallback extraction also failed: {e2}")
             raise
@@ -436,12 +605,20 @@ def chunk_text_with_positions(
     metadata: Any = None
 ) -> list:
     """Enhanced chunking that tracks character positions and extracts structural info."""
+    log.info(f"=== chunk_text_with_positions called ===")
+    log.info(f"texts type: {type(texts)}, length: {len(texts) if texts else 'None'}")
+    log.info(f"size: {size}, overlap: {overlap}, strategy: {strategy}")
+    log.info(f"metadata type: {type(metadata)}")
+    
     if strategy == ChunkStrategyType.tokens:
-        return chunk_texts_by_tokens_with_positions(
+        result = chunk_texts_by_tokens_with_positions(
             texts, size, overlap, encode_fn, decode_fn, metadata
         )
+        log.info(f"chunk_texts_by_tokens_with_positions returned {len(result) if result else 'None'} chunks")
+        return result
     else:
         # Fallback to original implementation for other strategies
+        log.info("Using fallback chunking method")
         df = pd.DataFrame({"texts": [texts]})
         chunks = chunk_text(
             df,
@@ -452,6 +629,11 @@ def chunk_text_with_positions(
             strategy=strategy,
             callbacks=WorkflowCallbacks(),
         )[0]
+        
+        log.info(f"Fallback chunking returned {len(chunks) if chunks else 'None'} chunks")
+        if chunks and len(chunks) > 0:
+            log.info(f"First fallback chunk type: {type(chunks[0])}")
+            log.info(f"First fallback chunk: {chunks[0]}")
         
         # Convert to enhanced format
         enhanced_chunks = []
@@ -465,6 +647,8 @@ def chunk_text_with_positions(
                     "char_end": None,
                     "source_metadata": metadata
                 })
+        
+        log.info(f"Converted to {len(enhanced_chunks)} enhanced chunks")
         return enhanced_chunks
 
 
@@ -477,6 +661,10 @@ def chunk_texts_by_tokens_with_positions(
     metadata: Any = None
 ) -> list:
     """Enhanced token-based chunking that tracks positions and extracts structural info."""
+    log.info(f"=== chunk_texts_by_tokens_with_positions called ===")
+    log.info(f"texts: {texts}")
+    log.info(f"size: {size}, overlap: {overlap}")
+    
     results = []
     
     # Parse metadata once if available
@@ -485,19 +673,27 @@ def chunk_texts_by_tokens_with_positions(
         if isinstance(metadata, str):
             try:
                 parsed_metadata = json.loads(metadata)
+                log.info("Successfully parsed metadata from string")
             except:
+                log.warning("Failed to parse metadata from string")
                 pass
         elif isinstance(metadata, dict):
             parsed_metadata = metadata
+            log.info("Using metadata as dict")
 
     for doc_id, text in texts:
+        log.info(f"Processing document {doc_id}")
+        log.info(f"Text length: {len(str(text)) if text else 'None'}")
+        
         if not text or pd.isna(text):
+            log.info("Skipping empty/null text")
             continue
 
         text_str = str(text)
         
         # Tokenize once
         tokens = encode_fn(text_str)
+        log.info(f"Tokenized to {len(tokens)} tokens")
         
         # Create chunks efficiently with position tracking
         start_idx = 0
@@ -507,6 +703,10 @@ def chunk_texts_by_tokens_with_positions(
             end_idx = min(start_idx + size, len(tokens))
             chunk_tokens = tokens[start_idx:end_idx]
             chunk_text = decode_fn(chunk_tokens)
+            
+            log.info(f"Creating chunk {len(results) + 1}: tokens {start_idx}-{end_idx} ({len(chunk_tokens)} tokens)")
+            log.info(f"Chunk text length: {len(chunk_text)}")
+            log.info(f"Chunk text preview: {chunk_text[:100]}...")
             
             # Calculate character positions in original text
             char_start = None
@@ -519,13 +719,18 @@ def chunk_texts_by_tokens_with_positions(
                     char_start = chunk_start_in_text
                     char_end = char_start + len(chunk_text.strip())
                     char_offset = char_end
-            except:
+                    log.info(f"Position tracking: char_start={char_start}, char_end={char_end}")
+                else:
+                    log.warning("Failed to find chunk text in original document")
+            except Exception as e:
+                log.warning(f"Position tracking failed: {e}")
                 pass  # Position tracking failed, continue without positions
             
             # Extract structural information for this chunk
             structural_info = extract_chunk_structural_info(
                 chunk_text, char_start, char_end, parsed_metadata
             )
+            log.info(f"Structural info extracted: {structural_info}")
             
             chunk_data = {
                 "document_ids": [doc_id],
@@ -537,48 +742,46 @@ def chunk_texts_by_tokens_with_positions(
                 **structural_info  # Add any extracted structural info
             }
             
+            log.info(f"Created chunk_data: {chunk_data}")
             results.append(chunk_data)
 
             if end_idx >= len(tokens):
+                log.info("Reached end of tokens")
                 break
 
             start_idx += size - overlap
+            log.info(f"Next chunk will start at token {start_idx}")
 
+    log.info(f"chunk_texts_by_tokens_with_positions returning {len(results)} chunks")
+    if results and len(results) > 0:
+        log.info(f"First result: {results[0]}")
     return results
 
 
 def extract_chunk_structural_info(chunk_text: str, char_start: int, char_end: int, metadata: dict) -> dict:
     """Extract structural information for a specific chunk based on its position and content."""
+    log.info(f"=== extract_chunk_structural_info called ===")
+    log.info(f"char_start: {char_start}, char_end: {char_end}")
+    log.info(f"metadata type: {type(metadata)}")
+    
     structural_info = {}
     
     if not metadata or not isinstance(metadata, dict):
+        log.info("No metadata or not dict, returning empty structural info")
         return structural_info
         
     html_data = metadata.get("html", {})
     if not isinstance(html_data, dict):
+        log.info("No html data in metadata, returning empty structural info")
         return structural_info
     
-    # Extract page information based on character position
-    pages = html_data.get("pages", [])
-    if isinstance(pages, list) and char_start is not None:
-        # Find the page this chunk belongs to
-        # For now, we'll use a simple heuristic based on position
-        # This could be improved with more sophisticated page boundary detection
-        total_pages = len(pages)
-        if total_pages > 0:
-            # Estimate page based on character position
-            # This is a rough approximation - in a real implementation,
-            # you'd want to track actual page boundaries during parsing
-            estimated_page_idx = min(int(char_start / 10000), total_pages - 1)  # Rough estimate
-            if 0 <= estimated_page_idx < len(pages):
-                page_info = pages[estimated_page_idx]
-                if isinstance(page_info, dict):
-                    structural_info["page_id"] = page_info.get("page_id")
-                    structural_info["page_number"] = page_info.get("page_num")
+    log.info(f"HTML data keys: {list(html_data.keys())}")
     
-    # Extract paragraph information based on character position
+    # Only extract paragraph information based on actual character position overlap
+    # Skip page information for now - would need proper page boundary tracking during HTML parsing
     paragraphs = html_data.get("paragraphs", [])
     if isinstance(paragraphs, list) and char_start is not None and char_end is not None:
+        log.info(f"Processing {len(paragraphs)} paragraphs for position {char_start}-{char_end}")
         # Find paragraphs that overlap with this chunk
         for para in paragraphs:
             if isinstance(para, dict):
@@ -592,8 +795,10 @@ def extract_chunk_structural_info(chunk_text: str, char_start: int, char_end: in
                     structural_info["paragraph_number"] = para.get("para_num")
                     structural_info["char_position_start"] = char_start
                     structural_info["char_position_end"] = char_end
+                    log.info(f"Found overlapping paragraph: {structural_info}")
                     break  # Use the first matching paragraph
     
+    log.info(f"Final structural info: {structural_info}")
     return structural_info
 
 
