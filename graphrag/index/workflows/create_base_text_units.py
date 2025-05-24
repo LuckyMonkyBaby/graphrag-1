@@ -218,6 +218,7 @@ def create_base_text_units(
     aggregated["document_ids"] = None
     aggregated["text"] = None
     aggregated["n_tokens"] = None
+    aggregated["filename"] = None  # Add filename column
     
     # Process each chunk using iloc to avoid index issues
     for i in range(len(aggregated)):
@@ -231,11 +232,33 @@ def create_base_text_units(
             aggregated.iloc[i, aggregated.columns.get_loc("document_ids")] = chunk.get("document_ids", [])
             aggregated.iloc[i, aggregated.columns.get_loc("text")] = chunk.get("text", "")
             aggregated.iloc[i, aggregated.columns.get_loc("n_tokens")] = chunk.get("n_tokens", 0)
+            
+            # Extract filename from document metadata if available
+            doc_ids = chunk.get("document_ids", [])
+            if doc_ids and len(doc_ids) > 0:
+                # Look up the original document to get filename
+                doc_id = doc_ids[0]
+                matching_docs = documents[documents["id"] == doc_id]
+                if len(matching_docs) > 0:
+                    doc_metadata = matching_docs.iloc[0].get("metadata")
+                    filename = extract_filename_from_metadata(doc_metadata)
+                    aggregated.iloc[i, aggregated.columns.get_loc("filename")] = filename
+                    
         elif isinstance(chunk, (list, tuple)) and len(chunk) >= 3:
             # Extract from tuple format
             aggregated.iloc[i, aggregated.columns.get_loc("document_ids")] = chunk[0] if isinstance(chunk[0], list) else [chunk[0]]
             aggregated.iloc[i, aggregated.columns.get_loc("text")] = chunk[1]
             aggregated.iloc[i, aggregated.columns.get_loc("n_tokens")] = chunk[2]
+            
+            # Extract filename for tuple format too
+            doc_ids = chunk[0] if isinstance(chunk[0], list) else [chunk[0]]
+            if doc_ids and len(doc_ids) > 0:
+                doc_id = doc_ids[0]
+                matching_docs = documents[documents["id"] == doc_id]
+                if len(matching_docs) > 0:
+                    doc_metadata = matching_docs.iloc[0].get("metadata")
+                    filename = extract_filename_from_metadata(doc_metadata)
+                    aggregated.iloc[i, aggregated.columns.get_loc("filename")] = filename
 
     # Ensure document_ids is always a list
     aggregated["document_ids"] = aggregated["document_ids"].apply(
@@ -266,14 +289,10 @@ def create_base_text_units(
                 if "char_position_end" in chunk:
                     aggregated.iloc[i, aggregated.columns.get_loc(CHAR_POSITION_END)] = chunk["char_position_end"]
 
-    # Create simple attributes
-    aggregated["attributes"] = aggregated.apply(
-        lambda row: json.dumps({
-            "paragraph": {"id": row.get(PARAGRAPH_ID), "number": row.get(PARAGRAPH_NUMBER)} 
-            if row.get(PARAGRAPH_ID) else {}
-        }) if row.get(PARAGRAPH_ID) else "{}",
-        axis=1
-    )
+    # Remove redundant columns - we've extracted everything we need
+    log.info("Removing redundant columns")
+    columns_to_drop = ["chunk"]  # Remove the raw chunk column
+    aggregated = aggregated.drop(columns=columns_to_drop)
 
     # Filter out rows with no text and reset index
     result = aggregated[aggregated["text"].notna()].reset_index(drop=True)
@@ -396,11 +415,24 @@ def chunk_texts_by_tokens_with_positions(texts: list, size: int, overlap: int,
     return results
 
 
-def extract_chunk_structural_info(chunk_text: str, char_start: int, char_end: int, metadata: dict) -> dict:
-    """Simplified structural extraction - most work already done by HTML parser."""
-    # This function is now much simpler since we do the extraction directly in chunk_texts_by_tokens_with_positions
-    # Keep it for backward compatibility but it's mostly redundant now
-    return {}
+def extract_filename_from_metadata(metadata):
+    """Extract filename from document metadata."""
+    if not metadata:
+        return None
+        
+    # Handle both string and dict metadata
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except:
+            return None
+    
+    if isinstance(metadata, dict) and "html" in metadata:
+        html_data = metadata["html"]
+        if isinstance(html_data, dict):
+            return html_data.get("filename")
+    
+    return None
 
 
 def get_cached_encoding_fn(encoding_model: str, cache_size: int = 1000):
